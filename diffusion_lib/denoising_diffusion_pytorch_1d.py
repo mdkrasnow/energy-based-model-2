@@ -25,6 +25,13 @@ import os.path as osp
 import time
 import numpy as np
 
+# Import adversarial corruption modules
+from .adversarial_corruption import (
+    enhanced_corruption_step_v2,
+    enhanced_corruption_step_legacy,
+)
+from .curriculum_runtime import CurriculumRuntime
+
 
 def _custom_exception_hook(type, value, tb):
     if hasattr(sys, 'ps1') or not sys.stderr.isatty():
@@ -178,6 +185,12 @@ class GaussianDiffusion1D(nn.Module):
         continuous = False,
         connectivity = False,
         shortest_path = False,
+        # Add these new parameters for adversarial corruption
+        use_adversarial_corruption=True,  # Enable adversarial corruption
+        anm_adversarial_steps=5,          # Number of gradient ascent steps
+        anm_distance_penalty=0.1,         # Distance penalty weight (epsilon)
+        anm_warmup_steps=10000,           # Warmup before adversarial samples
+        curriculum_config=None,           # Optional curriculum configuration
     ):
         super().__init__()
         self.model = model
@@ -187,6 +200,27 @@ class GaussianDiffusion1D(nn.Module):
         self.self_condition = False
         self.supervise_energy_landscape = supervise_energy_landscape
         self.use_innerloop_opt = use_innerloop_opt
+        
+        # Store adversarial corruption parameters
+        self.use_adversarial_corruption = use_adversarial_corruption
+        self.anm_adversarial_steps = anm_adversarial_steps
+        self.anm_distance_penalty = anm_distance_penalty
+        self.anm_warmup_steps = anm_warmup_steps
+        
+        # Track training progress
+        self.training_step = 0
+        self.recent_energy_diffs = []
+        
+        # Optional curriculum
+        if curriculum_config is not None:
+            self.curriculum_runtime = CurriculumRuntime(
+                curriculum_config,
+                anm_distance_penalty,
+                anm_warmup_steps,
+                use_adversarial_corruption
+            )
+        else:
+            self.curriculum_runtime = None
 
         self.seq_length = seq_length
         self.objective = objective
@@ -405,6 +439,38 @@ class GaussianDiffusion1D(nn.Module):
 
         return img
 
+    def enhanced_corruption_step(self, inp, x_start, t, mask, data_cond, base_noise_scale=3.0):
+        """Wrapper for adversarial corruption with curriculum support."""
+        
+        if self.curriculum_runtime is not None:
+            # Use curriculum-aware corruption
+            stage, epsilon = self.curriculum_runtime.get_params(
+                self.training_step, 
+                self.anm_distance_penalty
+            )
+            corruption_type, x_corrupted = enhanced_corruption_step_v2(
+                self,  # Pass self as ops (implements DiffusionOps protocol)
+                stage,
+                epsilon,
+                inp, x_start, t, mask, data_cond,
+                base_noise_scale,
+                constraint_config=None  # No constraint-aware corruption
+            )
+        else:
+            # Use legacy behavior without curriculum
+            corruption_type, x_corrupted = enhanced_corruption_step_legacy(
+                self,  # Pass self as ops
+                self.use_adversarial_corruption,
+                self.training_step,
+                self.anm_warmup_steps,
+                self.anm_distance_penalty,
+                self.recent_energy_diffs,
+                inp, x_start, t, mask, data_cond,
+                base_noise_scale
+            )
+        
+        return x_corrupted
+
     @torch.no_grad()
     def p_sample_loop(self, batch_size, shape, inp, cond, mask, return_traj=False):
         device = self.betas.device
@@ -602,81 +668,15 @@ class GaussianDiffusion1D(nn.Module):
                 data_cond = self.q_sample(x_start = x_start, t = t, noise = torch.zeros_like(noise))
                 data_sample = data_sample * (1 - mask) + mask * data_cond
 
-            # Add a noise contrastive estimation term with samples drawn from the data distribution
-            #noise = torch.randn_like(x_start)
-
-            # Optimize a sample using gradient descent on energy landscape
-            xmin_noise = self.q_sample(x_start = x_start, t = t, noise = 3.0 * noise)
-
-            if mask is not None:
-                xmin_noise = xmin_noise * (1 - mask) + mask * data_cond
-            else:
+            # Generate adversarial negative sample using enhanced corruption
+            if not mask:
                 data_cond = None
-
-            if self.sudoku:
-                s = x_start.size()
-                x_start_im = x_start.view(-1, 9, 9, 9).argmax(dim=-1)
-                randperm = torch.randint(0, 9, x_start_im.size(), device=x_start_im.device)
-
-                rand_mask = (torch.rand(x_start_im.size(), device=x_start_im.device) < 0.05).float()
-
-                xmin_noise_im = x_start_im * (1 - rand_mask) + randperm * (rand_mask)
-
-                xmin_noise_im = F.one_hot(xmin_noise_im.long(), num_classes=9)
-                xmin_noise_im = (xmin_noise_im - 0.5) * 2
-
-                xmin_noise_rescale = xmin_noise_im.view(-1, 729)
-
-                loss_opt = torch.ones(1)
-
-                loss_scale = 0.05
-            elif self.connectivity:
-                s = x_start.size()
-                x_start_im = x_start.view(-1, 12, 12)
-                randperm = (torch.randint(0, 1, x_start_im.size(), device=x_start_im.device) - 0.5) * 2
-
-                rand_mask = (torch.rand(x_start_im.size(), device=x_start_im.device) < 0.05).float()
-
-                xmin_noise_rescale = x_start_im * (1 - rand_mask) + randperm * (rand_mask)
-
-                loss_opt = torch.ones(1)
-
-                loss_scale = 0.05
-            elif self.shortest_path:
-                x_start_list = x_start.argmax(dim=2)
-                classes = x_start.size(2)
-                rand_vals = torch.randint(0, classes, x_start_list.size()).to(x_start.device)
-
-                x_start_neg = torch.cat([rand_vals[:, :1], x_start_list[:, 1:]], dim=1)
-                x_start_neg_oh = F.one_hot(x_start_neg[:, :, 0].long(), num_classes=classes)[:, :, :, None]
-                xmin_noise_rescale = (x_start_neg_oh - 0.5) * 2
-
-                loss_opt = torch.ones(1)
-
-                loss_scale = 0.5
-            else:
-
-                xmin_noise = self.opt_step(inp, xmin_noise, t, mask, data_cond, step=2, sf=1.0)
-                xmin = extract(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
-                loss_opt = torch.pow(xmin_noise - xmin, 2).mean()
-
-                xmin_noise = xmin_noise.detach()
-                xmin_noise_rescale = self.predict_start_from_noise(xmin_noise, t, torch.zeros_like(xmin_noise))
-                xmin_noise_rescale = torch.clamp(xmin_noise_rescale, -2, 2)
-
-                # loss_opt = torch.ones(1)
-
-
-                # rand_mask = (torch.rand(x_start.size(), device=x_start.device) < 0.2).float()
-
-                # xmin_noise_rescale =  x_start * (1 - rand_mask) + rand_mask * x_start_noise
-
-                # nrep = 1
-
-
-                loss_scale = 0.5
-
-            xmin_noise = self.q_sample(x_start=xmin_noise_rescale, t=t, noise=noise)
+            
+            xmin_noise = self.enhanced_corruption_step(inp, x_start, t, mask, data_cond)
+            
+            # Compute loss_opt for compatibility
+            loss_opt = torch.ones(1).to(x_start.device)
+            loss_scale = 0.5
 
             if mask is not None:
                 xmin_noise = xmin_noise * (1 - mask) + mask * data_cond
@@ -693,10 +693,16 @@ class GaussianDiffusion1D(nn.Module):
             energy_stack = torch.cat([energy_real, energy_fake], dim=-1)
             target = torch.zeros(energy_real.size(0)).to(energy_stack.device)
             loss_energy = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
+            
+            # Track energy differences for adaptive curriculum
+            with torch.no_grad():
+                energy_diff = (energy_fake - energy_real).mean().item()
+                self.recent_energy_diffs.append(max(0, energy_diff))
+                if len(self.recent_energy_diffs) > 100:
+                    self.recent_energy_diffs.pop(0)
 
-            # loss_energy = energy_real.mean() - energy_fake.mean()# loss_energy.mean()
-
-            loss = loss_mse + loss_scale * loss_energy # + 0.001 * loss_opt
+            # Combine losses
+            loss = loss_mse + loss_scale * loss_energy
             return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_opt.mean())
         else:
             loss = loss_mse
@@ -917,6 +923,9 @@ class Trainer1D(object):
                         mask = None
 
                     data_time = time.time() - end_time; end_time = time.time()
+                    
+                    # Increment step counter before loss computation
+                    self.model.training_step += 1
 
                     with self.accelerator.autocast():
                         loss, (loss_denoise, loss_energy, loss_opt) = self.model(inp, label, mask)
@@ -986,6 +995,14 @@ class Trainer1D(object):
                     summary = binary_classification_accuracy_4(all_samples_list[0], label)
                     rows = [[k, v] for k, v in summary.items()]
                     print(tabulate(rows))
+                    
+                    # Optional: Update curriculum with validation metrics
+                    if hasattr(self.model, 'curriculum_runtime') and self.model.curriculum_runtime is not None:
+                        val_acc = summary.get('accuracy', 0.0)
+                        val_loss = 1.0 - val_acc  # Convert accuracy to loss-like metric
+                        self.model.curriculum_runtime.update_validation_performance(
+                            self.model.training_step, val_loss, val_acc
+                        )
                 elif self.metric == 'sudoku':
                     assert len(all_samples_list) == 1
                     summary = sudoku_accuracy(all_samples_list[0], label, mask)
