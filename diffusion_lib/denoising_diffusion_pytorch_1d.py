@@ -615,7 +615,7 @@ class GaussianDiffusion1D(nn.Module):
             extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
         )
 
-    def p_losses(self, inp, x_start, mask, t, noise = None):
+    def p_losses(self, inp, x_start, mask, t, noise = None, temperature = None):
         b, *c = x_start.shape
         noise = default(noise, lambda: torch.randn_like(x_start))
 
@@ -676,7 +676,16 @@ class GaussianDiffusion1D(nn.Module):
             
             # Compute loss_opt for compatibility
             loss_opt = torch.ones(1).to(x_start.device)
-            loss_scale = 0.5
+            
+            # Use temperature from curriculum if available, otherwise default to 0.5
+            if temperature is not None:
+                # Higher temperature = lower loss scale (more exploration)
+                # Lower temperature = higher loss scale (more exploitation)
+                # Scale inversely with temperature, clamped to reasonable range
+                loss_scale = 1.0 / max(temperature, 0.5)
+                loss_scale = min(max(loss_scale, 0.1), 2.0)  # Clamp between 0.1 and 2.0
+            else:
+                loss_scale = 0.5
 
             if mask is not None:
                 xmin_noise = xmin_noise * (1 - mask) + mask * data_cond
@@ -719,8 +728,17 @@ class GaussianDiffusion1D(nn.Module):
             self.out_shape = c
 
         t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
+        
+        # Get current temperature from curriculum if available
+        temperature = None
+        if hasattr(self, 'curriculum_runtime') and self.curriculum_runtime is not None:
+            stage, _ = self.curriculum_runtime.get_params(
+                self.training_step, 
+                getattr(self, 'anm_distance_penalty', 0.1)
+            )
+            temperature = stage.temperature
 
-        return self.p_losses(inp, target, mask, t, *args, **kwargs)
+        return self.p_losses(inp, target, mask, t, temperature=temperature, *args, **kwargs)
 
 # trainer class
 
@@ -858,9 +876,12 @@ class Trainer1D(object):
         if not self.accelerator.is_local_main_process:
             return
 
+        # Properly unwrap the model to avoid prefix issues
+        unwrapped_model = self.accelerator.unwrap_model(self.model)
+        
         data = {
             'step': self.step,
-            'model': self.accelerator.get_state_dict(self.model),
+            'model': unwrapped_model.state_dict(),  # Use unwrapped model's state_dict directly
             'opt': self.opt.state_dict(),
             'ema': self.ema.state_dict(),
             'scaler': self.accelerator.scaler.state_dict() if exists(self.accelerator.scaler) else None,
@@ -876,7 +897,32 @@ class Trainer1D(object):
         data = torch.load(milestone_file)
 
         model = self.accelerator.unwrap_model(self.model)
-        model.load_state_dict(data['model'])
+        
+        # Handle potential prefix issues in loaded state dict
+        state_dict = data['model']
+        model_state = model.state_dict()
+        
+        # Check for prefix mismatch
+        if state_dict:
+            sample_checkpoint_key = next(iter(state_dict.keys()))
+            sample_model_key = next(iter(model_state.keys()))
+            
+            # If checkpoint has 'model.' or 'module.' prefix but model doesn't
+            prefixes_to_remove = ['model.', 'module.']
+            for prefix in prefixes_to_remove:
+                if sample_checkpoint_key.startswith(prefix) and not sample_model_key.startswith(prefix):
+                    # Remove prefix from all keys
+                    fixed_state_dict = {}
+                    for k, v in state_dict.items():
+                        if k.startswith(prefix):
+                            new_key = k[len(prefix):]
+                            if new_key in model_state:
+                                fixed_state_dict[new_key] = v
+                    state_dict = fixed_state_dict
+                    print(f"Removed '{prefix}' prefix from checkpoint keys for compatibility")
+                    break
+        
+        model.load_state_dict(state_dict)
 
         self.step = data['step']
         self.opt.load_state_dict(data['opt'])

@@ -53,12 +53,10 @@ parser.add_argument('--evaluate', action='store_true', default=False)
 parser.add_argument('--latent', action='store_true', default=False)
 parser.add_argument('--ood', action='store_true', default=False)
 parser.add_argument('--baseline', action='store_true', default=False)
-# ANM (Adversarial Negative Mining) arguments
-parser.add_argument('--use-anm', action='store_true', default=False, help='Use adversarial negative mining')
+# ANM (Adversarial Negative Mining) arguments - Always uses curriculum
+parser.add_argument('--use-anm', action='store_true', default=False, help='Use adversarial negative mining with curriculum learning')
 parser.add_argument('--anm-adversarial-steps', type=int, default=5, help='Number of gradient ascent steps for ANM')
 parser.add_argument('--anm-distance-penalty', type=float, default=0.1, help='Distance penalty weight (epsilon) for ANM')
-parser.add_argument('--anm-warmup-steps', type=int, default=10000, help='Warmup steps before adversarial samples')
-parser.add_argument('--use-curriculum', action='store_true', default=False, help='Use curriculum learning with ANM')
 parser.add_argument('--train-steps', type=int, default=2000, help='Total number of training steps')
 
 
@@ -269,30 +267,17 @@ if __name__ == "__main__":
     if FLAGS.dataset in ['shortest-path', 'shortest-path-1d']:
         kwargs['shortest_path'] = True
 
-    # Create curriculum config if requested
+    # Create curriculum config when ANM is used (always use curriculum with ANM)
     curriculum_config = None
-    if FLAGS.use_curriculum and FLAGS.use_anm:
-        from curriculum_config import CurriculumConfig, CurriculumStage
+    if FLAGS.use_anm:
+        from curriculum_config import get_curriculum_by_name
         
-        # Use the training steps from command line
-        total_steps = FLAGS.train_steps
-        
-        # Aggressive curriculum for continuous tasks using percentages of total training
-        # Stage transitions at: 10%, 30%, 60%, 100% of training
-        curriculum_config = CurriculumConfig(
-            total_steps=total_steps,
-            stages={
-                # Warmup: First 10% - mostly clean samples to establish baseline
-                (0.0, 0.1): CurriculumStage("warmup", 1.0, 0.0, 0.0, 0.01, 1.0, "Establishing baseline with clean samples"),
-                # Easy: 10-30% - introduce adversarial samples gradually
-                (0.1, 0.3): CurriculumStage("easy", 0.5, 0.3, 0.2, 0.1, 1.5, "Gradual adversarial introduction"),
-                # Medium: 30-60% - balanced mix with more adversarial
-                (0.3, 0.6): CurriculumStage("medium", 0.3, 0.5, 0.2, 0.5, 2.0, "Balanced adversarial training"),
-                # Hard: 60%+ - mostly adversarial for robust training
-                (0.6, 1.0): CurriculumStage("hard", 0.1, 0.8, 0.1, 1.0, 3.0, "Robust adversarial training"),
-            },
-            enable_validation_gating=False,  # Disable validation gating for simplicity
-        )
+        # Use the AGGRESSIVE_CURRICULUM predefined configuration
+        curriculum_config = get_curriculum_by_name('aggressive')
+        # Update total steps from command line
+        curriculum_config.total_steps = FLAGS.train_steps
+        # Disable validation gating for simplicity
+        curriculum_config.enable_validation_gating = False
 
     diffusion = GaussianDiffusion1D(
         model,
@@ -306,7 +291,7 @@ if __name__ == "__main__":
         use_adversarial_corruption=FLAGS.use_anm,
         anm_adversarial_steps=FLAGS.anm_adversarial_steps,
         anm_distance_penalty=FLAGS.anm_distance_penalty,
-        anm_warmup_steps=int(0.1 * FLAGS.train_steps) if FLAGS.use_anm else FLAGS.anm_warmup_steps,  # 10% warmup for ANM
+        anm_warmup_steps=int(0.1 * FLAGS.train_steps) if FLAGS.use_anm else 0,  # 10% warmup for ANM
         curriculum_config=curriculum_config,
         **kwargs
     )
@@ -315,9 +300,7 @@ if __name__ == "__main__":
     if FLAGS.diffusion_steps != 100:
         result_dir = result_dir + f'_diffsteps_{FLAGS.diffusion_steps}'
     if FLAGS.use_anm:
-        result_dir = result_dir + '_anm'
-        if FLAGS.use_curriculum:
-            result_dir = result_dir + '_curriculum'
+        result_dir = result_dir + '_anm_curriculum'  # ANM always uses curriculum
     os.makedirs(result_dir, exist_ok=True)
 
     if FLAGS.latent:
