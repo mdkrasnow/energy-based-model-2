@@ -439,6 +439,21 @@ class GaussianDiffusion1D(nn.Module):
 
         return img
 
+    def energy_score(self, x_clean, x_sample, t):
+        """Compute energy score for given clean and sample data at timestep t.
+        
+        Args:
+            x_clean: Clean/reference data
+            x_sample: Sample data to compute energy for
+            t: Timestep tensor
+            
+        Returns:
+            Energy scores as tensor
+        """
+        # The model expects (inp, x, t) where inp is conditioning and x is the sample
+        # For energy scoring, we use x_clean as conditioning and x_sample as the sample
+        return self.model(x_clean, x_sample, t, return_energy=True)
+
     def enhanced_corruption_step(self, inp, x_start, t, mask, data_cond, base_noise_scale=3.0):
         """Wrapper for adversarial corruption with curriculum support."""
         
