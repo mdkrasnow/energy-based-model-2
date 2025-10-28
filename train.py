@@ -53,11 +53,23 @@ parser.add_argument('--evaluate', action='store_true', default=False)
 parser.add_argument('--latent', action='store_true', default=False)
 parser.add_argument('--ood', action='store_true', default=False)
 parser.add_argument('--baseline', action='store_true', default=False)
-# ANM (Adversarial Negative Mining) arguments - Always uses curriculum
-parser.add_argument('--use-anm', action='store_true', default=False, help='Use adversarial negative mining with curriculum learning')
-parser.add_argument('--anm-adversarial-steps', type=int, default=5, help='Number of gradient ascent steps for ANM')
-parser.add_argument('--anm-distance-penalty', type=float, default=0.1, help='Distance penalty weight (epsilon) for ANM')
+# ANM (Adversarial Negative Mining) arguments
+parser.add_argument('--use-anm', action='store_true', default=False, help='Use adversarial negative mining')
 parser.add_argument('--train-steps', type=int, default=2000, help='Total number of training steps')
+
+# Curriculum configuration
+parser.add_argument('--curriculum', type=str, default='aggressive', help='Name of curriculum to use (default, aggressive, conservative)')
+
+# Override parameters (these override curriculum values if specified)
+parser.add_argument('--anm-epsilon', type=float, default=None, help='ANM epsilon value (default: 0.1, scaled by curriculum)')
+parser.add_argument('--anm-adversarial-steps', type=int, default=None, help='Number of gradient ascent steps for ANM (default: 5)')
+parser.add_argument('--anm-learning-rate', type=float, default=None, help='Learning rate for model training (default: 1e-4)')
+parser.add_argument('--anm-distance-penalty', type=float, default=None, help='Distance penalty weight for ANM (default: same as anm-epsilon)')
+parser.add_argument('--anm-temperature', type=float, default=None, help='Temperature for loss scaling (default: varies by curriculum stage, typically 1.0-10.0)')
+parser.add_argument('--anm-clean-ratio', type=float, default=None, help='Proportion of clean examples (default: varies by curriculum stage, 0.05-1.0)')
+parser.add_argument('--anm-adversarial-ratio', type=float, default=None, help='Proportion of adversarial examples (default: varies by curriculum stage, 0.0-0.9)')
+parser.add_argument('--anm-gaussian-ratio', type=float, default=None, help='Proportion of Gaussian noise examples (default: varies by curriculum stage, 0.05-0.1)')
+parser.add_argument('--anm-warmup-steps', type=int, default=None, help='Number of warmup steps before adversarial samples (default: 10% of train steps)')
 
 
 if __name__ == "__main__":
@@ -267,18 +279,67 @@ if __name__ == "__main__":
     if FLAGS.dataset in ['shortest-path', 'shortest-path-1d']:
         kwargs['shortest_path'] = True
 
-    # Create curriculum config when ANM is used (always use curriculum with ANM)
+    # Create curriculum config when ANM is used
     curriculum_config = None
+    anm_epsilon = FLAGS.anm_epsilon
+    anm_adversarial_steps = FLAGS.anm_adversarial_steps
+    anm_learning_rate = FLAGS.anm_learning_rate
+    anm_warmup_steps = FLAGS.anm_warmup_steps
+    
     if FLAGS.use_anm:
-        from curriculum_config import get_curriculum_by_name
+        from curriculum_config import get_curriculum_by_name, CurriculumStage, CurriculumConfig
         
-        # Use the AGGRESSIVE_CURRICULUM predefined configuration
-        curriculum_config = get_curriculum_by_name('aggressive')
-        # Update total steps from command line
+        # Use the specified curriculum (default is 'aggressive')
+        curriculum_config = get_curriculum_by_name(FLAGS.curriculum)
         curriculum_config.total_steps = FLAGS.train_steps
         # Disable validation gating for simplicity
         curriculum_config.enable_validation_gating = False
+        
+        # Apply overrides to curriculum stages if specified
+        if any([FLAGS.anm_temperature is not None,
+                FLAGS.anm_clean_ratio is not None,
+                FLAGS.anm_adversarial_ratio is not None,
+                FLAGS.anm_gaussian_ratio is not None]):
+            # Create a new curriculum config with overridden values
+            modified_stages = {}
+            for (start_pct, end_pct), stage in curriculum_config.stages.items():
+                # Create a new stage with potentially overridden values
+                modified_stages[(start_pct, end_pct)] = CurriculumStage(
+                    name=stage.name,
+                    clean_ratio=FLAGS.anm_clean_ratio if FLAGS.anm_clean_ratio is not None else stage.clean_ratio,
+                    adversarial_ratio=FLAGS.anm_adversarial_ratio if FLAGS.anm_adversarial_ratio is not None else stage.adversarial_ratio,
+                    gaussian_ratio=FLAGS.anm_gaussian_ratio if FLAGS.anm_gaussian_ratio is not None else stage.gaussian_ratio,
+                    epsilon_multiplier=stage.epsilon_multiplier,  # Keep from curriculum
+                    temperature=FLAGS.anm_temperature if FLAGS.anm_temperature is not None else stage.temperature,
+                    focus=stage.focus + " (with overrides)"
+                )
+            curriculum_config.stages = modified_stages
+        
+        # Set default values from curriculum if not overridden
+        if anm_epsilon is None:
+            # Will be determined dynamically by curriculum
+            anm_epsilon = 0.1  # Default base value, will be scaled by curriculum
+        
+        if anm_adversarial_steps is None:
+            # Default value if not specified
+            anm_adversarial_steps = 5
+        
+        if anm_warmup_steps is None:
+            # Default to 10% of training steps
+            anm_warmup_steps = int(0.1 * FLAGS.train_steps)
+            
+        # anm_distance_penalty is the same as epsilon if not specified
+        if FLAGS.anm_distance_penalty is None:
+            anm_distance_penalty = anm_epsilon
+        else:
+            anm_distance_penalty = FLAGS.anm_distance_penalty
 
+    # When ANM is not used, set defaults for the parameters
+    if not FLAGS.use_anm:
+        anm_adversarial_steps = 5
+        anm_distance_penalty = 0.1
+        anm_warmup_steps = 0
+    
     diffusion = GaussianDiffusion1D(
         model,
         seq_length = 32,
@@ -289,9 +350,9 @@ if __name__ == "__main__":
         use_innerloop_opt = FLAGS.use_innerloop_opt,
         show_inference_tqdm = False,
         use_adversarial_corruption=FLAGS.use_anm,
-        anm_adversarial_steps=FLAGS.anm_adversarial_steps,
-        anm_distance_penalty=FLAGS.anm_distance_penalty,
-        anm_warmup_steps=int(0.1 * FLAGS.train_steps) if FLAGS.use_anm else 0,  # 10% warmup for ANM
+        anm_adversarial_steps=anm_adversarial_steps,
+        anm_distance_penalty=anm_distance_penalty,
+        anm_warmup_steps=anm_warmup_steps,
         curriculum_config=curriculum_config,
         **kwargs
     )
@@ -300,7 +361,15 @@ if __name__ == "__main__":
     if FLAGS.diffusion_steps != 100:
         result_dir = result_dir + f'_diffsteps_{FLAGS.diffusion_steps}'
     if FLAGS.use_anm:
-        result_dir = result_dir + '_anm_curriculum'  # ANM always uses curriculum
+        # Check if specific hyperparameters were provided
+        if FLAGS.anm_epsilon is not None and FLAGS.anm_adversarial_steps is not None:
+            # Use specific hyperparameter suffix for sweep
+            result_dir = result_dir + f'_anm_eps{FLAGS.anm_epsilon}_steps{FLAGS.anm_adversarial_steps}'
+            # Add distance penalty to directory name if explicitly provided
+            if FLAGS.anm_distance_penalty is not None:
+                result_dir = result_dir + f'_dp{FLAGS.anm_distance_penalty}'
+        else:
+            result_dir = result_dir + '_anm_curriculum'  # Default ANM
     os.makedirs(result_dir, exist_ok=True)
 
     if FLAGS.latent:
@@ -312,12 +381,15 @@ if __name__ == "__main__":
     else:
         autoencode_model = None
 
+    # Use the learning rate override if specified, otherwise default to 1e-4
+    train_lr = anm_learning_rate if anm_learning_rate is not None else 1e-4
+    
     trainer = Trainer1D(
         diffusion,
         dataset,
         train_batch_size = FLAGS.batch_size,
         validation_batch_size = validation_batch_size,
-        train_lr = 1e-4,
+        train_lr = train_lr,
         train_num_steps = FLAGS.train_steps,         # total training steps from command line
         gradient_accumulate_every = 1,    # gradient accumulation steps
         ema_decay = 0.995,                # exponential moving average decay

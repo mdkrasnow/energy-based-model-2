@@ -872,7 +872,7 @@ class Trainer1D(object):
             self.ema.to(self.device)
 
         self.results_folder = Path(results_folder)
-        self.results_folder.mkdir(exist_ok = True)
+        self.results_folder.mkdir(parents=True, exist_ok=True)
 
         # step counter state
 

@@ -8,9 +8,9 @@ ssh mkrasnow@login.rc.fas.harvard.edu
 
 Running:
 
-RUN THIS BEFORE SSHing ONTO THE SERVER: Update file: `scp smoke_test_comparison.py mkrasnow@login.rc.fas.harvard.edu:~/smoke_test_comparison.py`
+RUN THIS BEFORE SSHing ONTO THE SERVER: Update file: `scp smoke_test_with_diagnostics.py mkrasnow@login.rc.fas.harvard.edu:~/smoke_test_with_diagnostics.py`
 
-Submit with `sbatch run_smoke_test.sh`
+Submit with `sbatch run_diagnostics.sh`
 Check status: `squeue -u mkrasnow`
 Monitor the output file: `tail -f smoke_test_42933839.out`
 Check for GPU utilization: `squeue -u $USER`
