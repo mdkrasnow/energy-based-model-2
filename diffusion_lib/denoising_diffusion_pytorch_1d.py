@@ -1164,7 +1164,7 @@ class Trainer1D(object):
                     # all_samples = torch.cat(all_samples_list, dim = 0)
                     mse_error = (samples - label).pow(2).mean()
                     meters['mse'].update(mse_error, n=inp.size(0))
-                    if i > 20:
+                    if i > 80:
                         break
                 elif self.metric == 'bce':
                     summary = binary_classification_accuracy_4(samples, label)

@@ -44,7 +44,7 @@ from dataset import Addition, Inverse, LowRankDataset
 # Hyperparameters from the paper (Appendix A)
 BATCH_SIZE = 2048
 LEARNING_RATE = 1e-4
-TRAIN_ITERATIONS = 1000  
+TRAIN_ITERATIONS = 20000  
 DIFFUSION_STEPS = 10
 RANK = 20  # For 20x20 matrices
 DISTANCE_PENALTY = 0.001
@@ -96,10 +96,10 @@ class ExperimentRunner:
             else:
                 base += '_anm_curriculum'  # Default ANM
         return base
-    
+
     def load_model_for_diagnostics(self, model_dir, device='cuda'):
         """Load model checkpoint for diagnostic purposes with robust prefix handling"""
-        checkpoint_path = Path(model_dir) / 'model-1.pt'
+        checkpoint_path = Path(model_dir) / 'model-20.pt'
         if not checkpoint_path.exists():
             return None
             
@@ -272,29 +272,43 @@ class ExperimentRunner:
                 energies['gaussian_noise'].append(energy_gaussian.mean().item())
         
         return energies
-    
+
     def _simulate_anm_output(self, x_clean, y_clean, t, diffusion, num_steps=5, eps=0.1):
         """Simulate ANM adversarial corruption on output y given input x"""
         y_adv = y_clean.clone().requires_grad_(True)
         
+        # Data scale check - only print once per batch
+        if not hasattr(self, '_data_scale_printed'):
+            print("=" * 60)
+            print("DATA SCALE CHECK:")
+            print(f"Clean output norm: {y_clean.norm(dim=-1).mean().item():.6f}")
+            print(f"Clean output range: {y_clean.min().item():.6f} to {y_clean.max().item():.6f}")
+            print(f"DISTANCE_PENALTY: {DISTANCE_PENALTY}")
+            print(f"Relative distance penalty: {DISTANCE_PENALTY / y_clean.norm(dim=-1).mean().item():.3f} of mean norm")
+            print("=" * 60)
+            self._data_scale_printed = True
+
         for _ in range(num_steps):
             energy = diffusion.energy_score(x_clean, y_adv, t)
             grad = torch.autograd.grad(energy.sum(), y_adv)[0]
-            
+
             with torch.no_grad():
                 y_adv = y_adv + eps * grad.sign()
-                distance_penalty = DISTANCE_PENALTY
-                y_adv = y_clean + distance_penalty * (y_adv - y_clean)
-            
+                # Constrain adversarial samples to stay within distance_penalty of clean
+                movement = y_adv - y_clean
+                movement_norm = torch.norm(movement, dim=-1, keepdim=True)
+                max_movement = DISTANCE_PENALTY
+                y_adv = y_clean + movement * torch.clamp(max_movement / (movement_norm + 1e-8), max=1.0)
+
             y_adv.requires_grad_(True)
-        
+
         return y_adv.detach()
-    
+
     def run_comparative_diagnostics(self, baseline_dir, anm_dir, dataset='addition', config_name='default'):
         """Critical test: Direct comparison on same batch"""
         baseline_result = self.load_model_for_diagnostics(baseline_dir)
         anm_result = self.load_model_for_diagnostics(anm_dir)
-        
+
         if baseline_result is None or anm_result is None:
             return None
             
@@ -352,7 +366,7 @@ class ExperimentRunner:
         actual_train_steps = train_steps if train_steps is not None else TRAIN_ITERATIONS
         
         # Check if model already exists
-        if not force_retrain and os.path.exists(f'{result_dir}/model-1.pt'):
+        if not force_retrain and os.path.exists(f'{result_dir}/model-20.pt'):
             print(f"\n{'='*80}")
             print(f"Model for {dataset} ({model_type}) already exists. Skipping training.")
             print(f"Use --force to retrain.")
@@ -507,7 +521,7 @@ class ExperimentRunner:
         epsilon_values = [0.1, 0.3, 0.5]
         adv_steps_values = [5, 20, 50]
         distance_penalty_values = [0.01, 0.001]  # Test two distance penalties
-        train_steps = 1000  # Shorter runs for sweep
+        train_steps = 20000  # Shorter runs for sweep
         
         print(f"\n{'#'*80}")
         print(f"# HYPERPARAMETER SWEEP FOR ANM")
@@ -527,12 +541,34 @@ class ExperimentRunner:
         
         # Train baseline once if needed
         baseline_dir = self.get_result_dir(dataset, 'baseline')
-        if not os.path.exists(f'{baseline_dir}/model-1.pt') or force_retrain:
+        if not os.path.exists(f'{baseline_dir}/model-20.pt') or force_retrain:
             print("Training baseline model first...")
             self.train_model(dataset, 'baseline', force_retrain, train_steps=train_steps)
         
+        # --- NEW: Evaluate and record baseline (IRED) for reference ---
+        print("\nCollecting baseline (IRED) reference metrics...")
+        # Energy diagnostics on baseline
+        baseline_energies = self.run_energy_diagnostics(baseline_dir, dataset)
+        # In-distribution and OOD MSE for baseline
+        baseline_mse_same = self.evaluate_model(dataset, 'baseline', ood=False)
+        baseline_mse_harder = self.evaluate_model(dataset, 'baseline', ood=True)
+
+        # Store baseline entry at the top of sweep_results
+        sweep_results = [{
+            'config': 'baseline',                 # sentinel config id
+            'epsilon': None,
+            'adv_steps': None,
+            'distance_penalty': None,
+            'energy_gap_percent': None,           # not applicable
+            'energy_ratio': None,                 # not applicable
+            'mse_same': baseline_mse_same,
+            'mse_harder': baseline_mse_harder,
+            'energies': baseline_energies,
+            'comparative': None                   # not applicable
+        }]
+        self.sweep_results.append(sweep_results[0])
+        
         # Run sweep
-        sweep_results = []
         total_configs = len(epsilon_values) * len(adv_steps_values) * len(distance_penalty_values)
         config_num = 0
         
@@ -599,6 +635,8 @@ class ExperimentRunner:
                             print(f"    Energy gap: {comp_result['energy_gap_percent']:+.1f}%")
                             print(f"    MSE (same): {mse_same:.4f}" if mse_same else "    MSE (same): N/A")
                             print(f"    MSE (harder): {mse_harder:.4f}" if mse_harder else "    MSE (harder): N/A")
+                    else:
+                        print("  ✗ Training failed for this config; skipping diagnostics/eval.")
         
         # Analyze and print sweep results
         self._print_sweep_summary(sweep_results, dataset)
@@ -611,7 +649,7 @@ class ExperimentRunner:
         result_dir = self.get_result_dir(dataset, 'anm', epsilon, adv_steps, distance_penalty)
         actual_train_steps = train_steps if train_steps is not None else TRAIN_ITERATIONS
         
-        if not os.path.exists(f'{result_dir}/model-1.pt'):
+        if not os.path.exists(f'{result_dir}/model-20.pt'):
             return None
         
         cmd = [
@@ -671,7 +709,15 @@ class ExperimentRunner:
         print(f"{'Config':<20s} {'Epsilon':>8s} {'Steps':>6s} {'Dist Pen':>10s} {'Energy Gap':>12s} {'MSE (same)':>12s} {'MSE (harder)':>13s} {'Status':>10s}")
         print("-" * 115)
         
-        for r in sorted_results:
+        # Print Baseline row first (if present)
+        baseline = next((r for r in sweep_results if r.get('config') == 'baseline'), None)
+        if baseline is not None:
+            mse_same_str = f"{baseline['mse_same']:.4f}" if baseline['mse_same'] is not None else "N/A"
+            mse_harder_str = f"{baseline['mse_harder']:.4f}" if baseline['mse_harder'] is not None else "N/A"
+            print(f"{'BASELINE (IRED)':<20s} {'-':>8s} {'-':>6s} {'-':>10s} {'-':>12s} {mse_same_str:>12s} {mse_harder_str:>13s} {'REF':>10s}")
+        
+        # Then print ANM configs sorted by energy gap
+        for r in [rr for rr in sorted_results if rr.get('config') != 'baseline']:
             gap = r['energy_gap_percent']
             gap_str = f"{gap:+.1f}%" if gap is not None else "N/A"
             mse_same_str = f"{r['mse_same']:.4f}" if r['mse_same'] is not None else "N/A"
@@ -735,6 +781,7 @@ class ExperimentRunner:
                 'learning_rate': LEARNING_RATE,
                 'diffusion_steps': DIFFUSION_STEPS,
                 'distance_penalties_tested': [0.01, 0.001],
+                'includes_baseline': True,
                 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
             },
             'sweep_results': sweep_results
@@ -750,10 +797,10 @@ class ExperimentRunner:
         result_dir = self.get_result_dir(dataset, model_type)
         
         # Check if model exists
-        if not os.path.exists(f'{result_dir}/model-1.pt'):
+        if not os.path.exists(f'{result_dir}/model-20.pt'):
             print(f"\n{'='*80}")
             print(f"ERROR: No trained model found for {dataset} ({model_type})")
-            print(f"Expected location: {result_dir}/model-1.pt")
+            print(f"Expected location: {result_dir}/model-20.pt")
             print(f"Please train the model first.")
             print(f"{'='*80}\n")
             sys.stdout.flush()

@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH -J smoke_test_with_diagnostics                    # Job name
-#SBATCH -p gpu_test                           # H100 partition
+#SBATCH -p gpu_test                          # H100 partition
 #SBATCH --account=ydu_lab                # Your lab account
 #SBATCH --gres=gpu:1                     # 1 H100 GPU
 #SBATCH -c 16                            # 16 CPU cores
-#SBATCH -t 03:00:00                    # 1 day
+#SBATCH -t 00-06:00:00                    # 1 day
 #SBATCH --mem=64G                        # 64 GB RAM
 #SBATCH -o smoke_test_%j.out             # Output file
 #SBATCH -e smoke_test_%j.err             # Error file
