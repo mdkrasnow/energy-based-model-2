@@ -8,7 +8,7 @@ ssh mkrasnow@login.rc.fas.harvard.edu
 
 Running:
 
-RUN THIS BEFORE SSHing ONTO THE SERVER: Update file: `scp run_specifics.sh mkrasnow@login.rc.fas.harvard.edu:~/run_specifics.sh`
+RUN THIS BEFORE SSHing ONTO THE SERVER: Update file: `scp smoke_test_with_diagnostics.py mkrasnow@login.rc.fas.harvard.edu:~/smoke_test_with_diagnostics.py`
 
 Submit with `sbatch run_specifics.sh`
 Check status: `squeue -u mkrasnow`

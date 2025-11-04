@@ -29,6 +29,7 @@ from tqdm import tqdm
 from diffusion_lib.denoising_diffusion_pytorch_1d import GaussianDiffusion1D
 from models import EBM, DiffusionWrapper
 from dataset import Addition, Inverse, LowRankDataset
+from diffusion_lib.adversarial_corruption import _adversarial_corruption
 
 
 # Hyperparameters - Updated to 50k iterations
@@ -39,7 +40,7 @@ DIFFUSION_STEPS = 10
 RANK = 20  # For 20x20 matrices
 
 # Tasks to run
-TASKS = ['addition']
+TASKS = ['addition', 'inverse', 'lowrank']
 
 # Specific ANM configurations to test
 ANM_CONFIGS = [
@@ -178,7 +179,21 @@ class ExperimentRunner:
         model = model.to(device)
         model.eval()
         
-        # Setup diffusion
+        # Try to extract ANM parameters from model directory name (if specific config was used)
+        anm_adversarial_steps = 5  # Default
+        anm_distance_penalty = 0.1  # Default
+        
+        if "_anm_eps" in str(model_dir) and "_steps" in str(model_dir):
+            # Extract parameters from directory name like "_anm_eps0.3_steps20"
+            import re
+            eps_match = re.search(r'_anm_eps([\d.]+)', str(model_dir))
+            steps_match = re.search(r'_steps(\d+)', str(model_dir))
+            if eps_match:
+                anm_distance_penalty = float(eps_match.group(1))
+            if steps_match:
+                anm_adversarial_steps = int(steps_match.group(1))
+        
+        # Setup diffusion with ANM parameters for proper adversarial corruption
         diffusion = GaussianDiffusion1D(
             model,
             seq_length=32,
@@ -186,7 +201,14 @@ class ExperimentRunner:
             timesteps=DIFFUSION_STEPS,
             sampling_timesteps=DIFFUSION_STEPS,
             continuous=True,
-            show_inference_tqdm=False
+            show_inference_tqdm=False,
+            # Add ANM parameters to match training configuration
+            use_adversarial_corruption=True,
+            anm_adversarial_steps=anm_adversarial_steps,
+            anm_distance_penalty=anm_distance_penalty,
+            anm_warmup_steps=0,  # Not relevant for diagnostics
+            sudoku=False,  # Required by DiffusionOps protocol
+            shortest_path=False,  # Required by DiffusionOps protocol
         )
         
         return model, diffusion, device, dataset
@@ -243,23 +265,25 @@ class ExperimentRunner:
         return energies
 
     def _simulate_anm_output(self, x_clean, y_clean, t, diffusion, num_steps=5, eps=0.1):
-        """Simulate ANM adversarial corruption on output y given input x"""
-        y_adv = y_clean.clone().requires_grad_(True)
+        """Use actual ANM adversarial corruption instead of simulation"""
         
-        for _ in range(num_steps):
-            energy = diffusion.energy_score(x_clean, y_adv, t)
-            grad = torch.autograd.grad(energy.sum(), y_adv)[0]
-
-            with torch.no_grad():
-                y_adv = y_adv + eps * grad.sign()
-                movement = y_adv - y_clean
-                movement_norm = torch.norm(movement, dim=-1, keepdim=True)
-                max_movement = 0.001  # Default distance penalty
-                y_adv = y_clean + movement * torch.clamp(max_movement / (movement_norm + 1e-8), max=1.0)
-
-            y_adv.requires_grad_(True)
-
-        return y_adv.detach()
+        # Use the actual adversarial corruption with real parameters
+        # Extract real training parameters from diffusion object
+        anm_adversarial_steps = getattr(diffusion, 'anm_adversarial_steps', num_steps)
+        anm_distance_penalty = getattr(diffusion, 'anm_distance_penalty', eps)
+        
+        # Call the actual adversarial corruption function
+        # diffusion object should already implement the DiffusionOps protocol
+        return _adversarial_corruption(
+            ops=diffusion,
+            inp=x_clean,
+            x_start=y_clean,
+            t=t,
+            mask=None,  # No masking in diagnostic context
+            data_cond=None,  # No conditioning in diagnostic context
+            base_noise_scale=3.0,  # Standard base noise scale
+            epsilon=anm_distance_penalty
+        )
 
     def run_comparative_diagnostics(self, baseline_dir, anm_dir, dataset='addition', config_name='default'):
         """Critical test: Direct comparison on same batch"""

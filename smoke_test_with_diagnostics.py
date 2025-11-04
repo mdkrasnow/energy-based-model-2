@@ -6,7 +6,7 @@
 #   - Modified get_result_dir() to support epsilon/adv_steps specific directories
 #   - Modified train_model() to accept custom hyperparameters
 #   - Added --sweep, --dataset CLI arguments to enable sweep mode
-#   - Sweep tests epsilon=[0.1, 0.3, 0.5] × adv_steps=[5, 20, 50] at 20k steps
+#   - Sweep tests specific configurations targeting different energy bands
 
 import os
 import subprocess
@@ -39,6 +39,7 @@ from tqdm import tqdm
 from diffusion_lib.denoising_diffusion_pytorch_1d import GaussianDiffusion1D
 from models import EBM, DiffusionWrapper
 from dataset import Addition, Inverse, LowRankDataset
+from diffusion_lib.adversarial_corruption import _adversarial_corruption
 
 
 # Hyperparameters from the paper (Appendix A)
@@ -208,7 +209,21 @@ class ExperimentRunner:
         model = model.to(device)
         model.eval()
         
-        # Setup diffusion
+        # Try to extract ANM parameters from model directory name (if specific config was used)
+        anm_adversarial_steps = 5  # Default
+        anm_distance_penalty = 0.1  # Default
+        
+        if "_anm_eps" in str(model_dir) and "_steps" in str(model_dir):
+            # Extract parameters from directory name like "_anm_eps0.3_steps20"
+            import re
+            eps_match = re.search(r'_anm_eps([\d.]+)', str(model_dir))
+            steps_match = re.search(r'_steps(\d+)', str(model_dir))
+            if eps_match:
+                anm_distance_penalty = float(eps_match.group(1))
+            if steps_match:
+                anm_adversarial_steps = int(steps_match.group(1))
+        
+        # Setup diffusion with ANM parameters for proper adversarial corruption
         diffusion = GaussianDiffusion1D(
             model,
             seq_length=32,
@@ -216,7 +231,14 @@ class ExperimentRunner:
             timesteps=DIFFUSION_STEPS,
             sampling_timesteps=DIFFUSION_STEPS,
             continuous=True,
-            show_inference_tqdm=False
+            show_inference_tqdm=False,
+            # Add ANM parameters to match training configuration
+            use_adversarial_corruption=True,
+            anm_adversarial_steps=anm_adversarial_steps,
+            anm_distance_penalty=anm_distance_penalty,
+            anm_warmup_steps=0,  # Not relevant for diagnostics
+            sudoku=False,  # Required by DiffusionOps protocol
+            shortest_path=False,  # Required by DiffusionOps protocol
         )
         
         return model, diffusion, device, dataset
@@ -274,35 +296,37 @@ class ExperimentRunner:
         return energies
 
     def _simulate_anm_output(self, x_clean, y_clean, t, diffusion, num_steps=5, eps=0.1):
-        """Simulate ANM adversarial corruption on output y given input x"""
-        y_adv = y_clean.clone().requires_grad_(True)
+        """Use actual ANM adversarial corruption instead of simulation"""
+        
+        # Use the actual adversarial corruption with real parameters
+        # Extract real training parameters from diffusion object
+        anm_adversarial_steps = getattr(diffusion, 'anm_adversarial_steps', num_steps)
+        anm_distance_penalty = getattr(diffusion, 'anm_distance_penalty', eps)
         
         # Data scale check - only print once per batch
         if not hasattr(self, '_data_scale_printed'):
             print("=" * 60)
-            print("DATA SCALE CHECK:")
+            print("USING ACTUAL ADVERSARIAL CORRUPTION:")
             print(f"Clean output norm: {y_clean.norm(dim=-1).mean().item():.6f}")
             print(f"Clean output range: {y_clean.min().item():.6f} to {y_clean.max().item():.6f}")
-            print(f"DISTANCE_PENALTY: {DISTANCE_PENALTY}")
-            print(f"Relative distance penalty: {DISTANCE_PENALTY / y_clean.norm(dim=-1).mean().item():.3f} of mean norm")
+            print(f"ANM adversarial steps: {anm_adversarial_steps}")
+            print(f"ANM distance penalty (epsilon): {anm_distance_penalty}")
+            print(f"Relative distance penalty: {anm_distance_penalty / y_clean.norm(dim=-1).mean().item():.3f} of mean norm")
             print("=" * 60)
             self._data_scale_printed = True
-
-        for _ in range(num_steps):
-            energy = diffusion.energy_score(x_clean, y_adv, t)
-            grad = torch.autograd.grad(energy.sum(), y_adv)[0]
-
-            with torch.no_grad():
-                y_adv = y_adv + eps * grad.sign()
-                # Constrain adversarial samples to stay within distance_penalty of clean
-                movement = y_adv - y_clean
-                movement_norm = torch.norm(movement, dim=-1, keepdim=True)
-                max_movement = DISTANCE_PENALTY
-                y_adv = y_clean + movement * torch.clamp(max_movement / (movement_norm + 1e-8), max=1.0)
-
-            y_adv.requires_grad_(True)
-
-        return y_adv.detach()
+        
+        # Call the actual adversarial corruption function
+        # diffusion object should already implement the DiffusionOps protocol
+        return _adversarial_corruption(
+            ops=diffusion,
+            inp=x_clean,
+            x_start=y_clean,
+            t=t,
+            mask=None,  # No masking in diagnostic context
+            data_cond=None,  # No conditioning in diagnostic context
+            base_noise_scale=3.0,  # Standard base noise scale
+            epsilon=anm_distance_penalty
+        )
 
     def run_comparative_diagnostics(self, baseline_dir, anm_dir, dataset='addition', config_name='default'):
         """Critical test: Direct comparison on same batch"""
@@ -517,20 +541,42 @@ class ExperimentRunner:
     def run_hyperparameter_sweep(self, dataset='addition', force_retrain=False):
         """Run systematic hyperparameter sweep for ANM"""
         
-        # Define sweep parameters
-        epsilon_values = [0.1, 0.3, 0.5]
-        adv_steps_values = [5, 20, 50]
-        distance_penalty_values = [0.01, 0.001]  # Test two distance penalties
+        # Define specific configurations to test
+        # Very negative energy (hard negatives)
+        very_negative_configs = [
+            {'target_band': -100, 'epsilon': 0.9, 'adv_steps': 135, 'distance_penalty': 0.040},
+            {'target_band': -80, 'epsilon': 0.1, 'adv_steps': 125, 'distance_penalty': 0.010},
+            {'target_band': -60, 'epsilon': 0.3, 'adv_steps': 95, 'distance_penalty': 0.003},
+            {'target_band': -40, 'epsilon': 0.4, 'adv_steps': 80, 'distance_penalty': 0.005},
+            {'target_band': -20, 'epsilon': 0.5, 'adv_steps': 65, 'distance_penalty': 0.0075},
+        ]
+        
+        # Mid-point / near zero
+        midpoint_configs = [
+            {'target_band': 0, 'epsilon': 0.2, 'adv_steps': 15, 'distance_penalty': 0.010},
+        ]
+        
+        # Very positive energy (diverse high-energy positives)
+        positive_configs = [
+            {'target_band': 20, 'epsilon': 0.1, 'adv_steps': 55, 'distance_penalty': 0.040},
+            {'target_band': 40, 'epsilon': 1.0, 'adv_steps': 45, 'distance_penalty': 0.015},
+            {'target_band': 60, 'epsilon': 1.0, 'adv_steps': 25, 'distance_penalty': 0.002},
+            {'target_band': 80, 'epsilon': 1.0, 'adv_steps': 5, 'distance_penalty': 0.001},
+        ]
+        
+        # Combine all configurations
+        all_configs = very_negative_configs + midpoint_configs + positive_configs
         train_steps = 20000  # Shorter runs for sweep
         
         print(f"\n{'#'*80}")
-        print(f"# HYPERPARAMETER SWEEP FOR ANM")
+        print(f"# HYPERPARAMETER SWEEP FOR ANM - SPECIFIC CONFIGURATIONS")
         print(f"# Dataset: {dataset}")
-        print(f"# Epsilon values: {epsilon_values}")
-        print(f"# Adversarial steps: {adv_steps_values}")
-        print(f"# Distance penalties: {distance_penalty_values}")
         print(f"# Training steps: {train_steps} (~12 min each)")
-        print(f"# Total configs: {len(epsilon_values) * len(adv_steps_values) * len(distance_penalty_values)}")
+        print(f"# Total configs: {len(all_configs)}")
+        print(f"# Configuration types:")
+        print(f"#   - Very negative energy (hard negatives): {len(very_negative_configs)} configs")
+        print(f"#   - Mid-point / near zero: {len(midpoint_configs)} configs")
+        print(f"#   - Very positive energy (diverse positives): {len(positive_configs)} configs")
         print(f"# Fixed parameters:")
         print(f"#   - Learning rate: {LEARNING_RATE}")
         print(f"#   - Temperature: 1.0")
@@ -569,74 +615,78 @@ class ExperimentRunner:
         self.sweep_results.append(sweep_results[0])
         
         # Run sweep
-        total_configs = len(epsilon_values) * len(adv_steps_values) * len(distance_penalty_values)
+        total_configs = len(all_configs)
         config_num = 0
         
-        for epsilon in epsilon_values:
-            for adv_steps in adv_steps_values:
-                for distance_penalty in distance_penalty_values:
-                    config_num += 1
-                    config_name = f"eps{epsilon}_steps{adv_steps}_dp{distance_penalty}"
-                    
-                    print(f"\n{'='*80}")
-                    print(f"CONFIG {config_num}/{total_configs}: epsilon={epsilon}, adversarial_steps={adv_steps}, distance_penalty={distance_penalty}")
-                    print(f"{'='*80}")
-                    
-                    # Train model with these hyperparameters
-                    success = self.train_model(
-                        dataset, 
-                        model_type='anm',
-                        force_retrain=force_retrain,
-                        epsilon=epsilon,
-                        adv_steps=adv_steps,
-                        train_steps=train_steps,
-                        distance_penalty=distance_penalty
-                    )
-                    
-                    if success:
-                        # Run diagnostics
-                        anm_dir = self.get_result_dir(dataset, 'anm', epsilon, adv_steps, distance_penalty)
-                        
-                        # Energy diagnostics
-                        energies = self.run_energy_diagnostics(anm_dir, dataset)
-                        
-                        # Comparative diagnostics
-                        comp_result = self.run_comparative_diagnostics(
-                            baseline_dir, anm_dir, dataset, config_name
-                        )
-                        
-                        # Evaluate on test set
-                        mse_same = self.evaluate_model_with_config(
-                            dataset, epsilon, adv_steps, ood=False, train_steps=train_steps, distance_penalty=distance_penalty
-                        )
-                        mse_harder = self.evaluate_model_with_config(
-                            dataset, epsilon, adv_steps, ood=True, train_steps=train_steps, distance_penalty=distance_penalty
-                        )
-                        
-                        # Store results
-                        result = {
-                            'config': config_name,
-                            'epsilon': epsilon,
-                            'adv_steps': adv_steps,
-                            'distance_penalty': distance_penalty,
-                            'energy_gap_percent': comp_result['energy_gap_percent'] if comp_result else None,
-                            'energy_ratio': comp_result['energy_ratio'] if comp_result else None,
-                            'mse_same': mse_same,
-                            'mse_harder': mse_harder,
-                            'energies': energies,
-                            'comparative': comp_result
-                        }
-                        sweep_results.append(result)
-                        self.sweep_results.append(result)
-                        
-                        # Print quick summary
-                        if comp_result:
-                            print(f"\n  ✓ Config complete:")
-                            print(f"    Energy gap: {comp_result['energy_gap_percent']:+.1f}%")
-                            print(f"    MSE (same): {mse_same:.4f}" if mse_same else "    MSE (same): N/A")
-                            print(f"    MSE (harder): {mse_harder:.4f}" if mse_harder else "    MSE (harder): N/A")
-                    else:
-                        print("  ✗ Training failed for this config; skipping diagnostics/eval.")
+        for config in all_configs:
+            config_num += 1
+            # Extract parameters from config
+            epsilon = config['epsilon']
+            adv_steps = config['adv_steps']
+            distance_penalty = config['distance_penalty']
+            target_band = config['target_band']
+            
+            config_name = f"target{target_band:+d}_eps{epsilon}_steps{adv_steps}_dp{distance_penalty}"
+            
+            print(f"\n{'='*80}")
+            print(f"CONFIG {config_num}/{total_configs}: target_band={target_band:+d}%, epsilon={epsilon}, adversarial_steps={adv_steps}, distance_penalty={distance_penalty}")
+            print(f"{'='*80}")
+            
+            # Train model with these hyperparameters
+            success = self.train_model(
+                dataset, 
+                model_type='anm',
+                force_retrain=force_retrain,
+                epsilon=epsilon,
+                adv_steps=adv_steps,
+                train_steps=train_steps,
+                distance_penalty=distance_penalty
+            )
+            
+            if success:
+                # Run diagnostics
+                anm_dir = self.get_result_dir(dataset, 'anm', epsilon, adv_steps, distance_penalty)
+                
+                # Energy diagnostics
+                energies = self.run_energy_diagnostics(anm_dir, dataset)
+                
+                # Comparative diagnostics
+                comp_result = self.run_comparative_diagnostics(
+                    baseline_dir, anm_dir, dataset, config_name
+                )
+                
+                # Evaluate on test set
+                mse_same = self.evaluate_model_with_config(
+                    dataset, epsilon, adv_steps, ood=False, train_steps=train_steps, distance_penalty=distance_penalty
+                )
+                mse_harder = self.evaluate_model_with_config(
+                    dataset, epsilon, adv_steps, ood=True, train_steps=train_steps, distance_penalty=distance_penalty
+                )
+                
+                # Store results
+                result = {
+                    'config': config_name,
+                    'epsilon': epsilon,
+                    'adv_steps': adv_steps,
+                    'distance_penalty': distance_penalty,
+                    'energy_gap_percent': comp_result['energy_gap_percent'] if comp_result else None,
+                    'energy_ratio': comp_result['energy_ratio'] if comp_result else None,
+                    'mse_same': mse_same,
+                    'mse_harder': mse_harder,
+                    'energies': energies,
+                    'comparative': comp_result
+                }
+                sweep_results.append(result)
+                self.sweep_results.append(result)
+                
+                # Print quick summary
+                if comp_result:
+                    print(f"\n  ✓ Config complete:")
+                    print(f"    Energy gap: {comp_result['energy_gap_percent']:+.1f}%")
+                    print(f"    MSE (same): {mse_same:.4f}" if mse_same else "    MSE (same): N/A")
+                    print(f"    MSE (harder): {mse_harder:.4f}" if mse_harder else "    MSE (harder): N/A")
+            else:
+                print("  ✗ Training failed for this config; skipping diagnostics/eval.")
         
         # Analyze and print sweep results
         self._print_sweep_summary(sweep_results, dataset)
@@ -780,7 +830,13 @@ class ExperimentRunner:
                 'batch_size': BATCH_SIZE,
                 'learning_rate': LEARNING_RATE,
                 'diffusion_steps': DIFFUSION_STEPS,
-                'distance_penalties_tested': [0.01, 0.001],
+                'config_type': 'specific_configurations',
+                'total_configs': len(sweep_results) - 1,  # Exclude baseline
+                'config_categories': {
+                    'very_negative': 5,
+                    'midpoint': 1, 
+                    'positive': 4
+                },
                 'includes_baseline': True,
                 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
             },
@@ -1220,7 +1276,7 @@ class ExperimentRunner:
             ratio = self.diagnostic_results[comp_key]['energy_ratio']
             
             if 0.95 <= ratio <= 1.05:
-                recommendations += "1. Increase --anm-adversarial-steps\n   from 5 to 20-50\n\n"
+                recommendations += "1. Increase --anm-adversarial-steps\n   to higher values (50-135)\n\n"
                 recommendations += "2. Increase epsilon to 0.5-1.0\n\n"
                 recommendations += "3. Reduce distance penalty\n   from 0.1 to 0.01\n\n"
                 recommendations += "4. Start ANM earlier\n   (5% instead of 10%)"
@@ -1263,7 +1319,7 @@ class ExperimentRunner:
                 print("  unnecessary.\n")
                 
                 print("  RECOMMENDED FIXES:")
-                print("  1. Increase anm_adversarial_steps from 5 to 20-50")
+                print("  1. Increase anm_adversarial_steps to higher values (50-135)")
                 print("  2. Increase epsilon from 0.1 to 0.5-1.0")
                 print("  3. Reduce anm_distance_penalty from 0.1 to 0.01")
                 print("  4. Start ANM earlier in curriculum (5% instead of 10%)")
