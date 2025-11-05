@@ -40,19 +40,33 @@ DIFFUSION_STEPS = 10
 RANK = 20  # For 20x20 matrices
 
 # Tasks to run
-TASKS = ['addition', 'inverse', 'lowrank']
+TASKS = ['inverse', 'lowrank']
 
-# Specific ANM configurations to test
+# Specific ANM configurations to test - EXTREME CONFIGURATIONS
+# These represent the extremes from smoke_test_with_diagnostics.py sweep:
+# very negative energy targets (hard negatives) and very positive energy targets
 ANM_CONFIGS = [
     {
-        'name': 'anm_eps0.3_steps20_dp0.01',
-        'epsilon': 0.3,
-        'adv_steps': 20,
+        'name': 'anm_eps0.9_steps135_dp0.04',
+        'epsilon': 0.9,
+        'adv_steps': 135,
+        'distance_penalty': 0.04
+    },
+    {
+        'name': 'anm_eps0.1_steps125_dp0.01',
+        'epsilon': 0.1,
+        'adv_steps': 125,
         'distance_penalty': 0.01
     },
     {
-        'name': 'anm_eps0.3_steps5_dp0.001',
-        'epsilon': 0.3,
+        'name': 'anm_eps1.0_steps25_dp0.002',
+        'epsilon': 1.0,
+        'adv_steps': 25,
+        'distance_penalty': 0.002
+    },
+    {
+        'name': 'anm_eps1.0_steps5_dp0.001',
+        'epsilon': 1.0,
         'adv_steps': 5,
         'distance_penalty': 0.001
     }
@@ -210,6 +224,9 @@ class ExperimentRunner:
             sudoku=False,  # Required by DiffusionOps protocol
             shortest_path=False,  # Required by DiffusionOps protocol
         )
+        
+        # Move diffusion object and its buffers to the same device as the model
+        diffusion = diffusion.to(device)
         
         return model, diffusion, device, dataset
     

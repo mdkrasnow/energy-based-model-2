@@ -8,13 +8,13 @@ ssh mkrasnow@login.rc.fas.harvard.edu
 
 Running:
 
-RUN THIS BEFORE SSHing ONTO THE SERVER: Update file: `scp smoke_test_with_diagnostics.py mkrasnow@login.rc.fas.harvard.edu:~/smoke_test_with_diagnostics.py`
+RUN THIS BEFORE SSHing ONTO THE SERVER: Update file: `scp evaluate_specific_configs.py mkrasnow@login.rc.fas.harvard.edu:~/evaluate_specific_configs.py`
 
 Submit with `sbatch run_specifics.sh`
 Check status: `squeue -u mkrasnow`
-Monitor the output file: `tail -f specific_configs_42933839.out`
+Monitor the output file: `tail -f evaluate_specific_configs_42933839.out`
 Check for GPU utilization: `squeue -u $USER`
-Get error logs: `cat specific_configs_42933839.err`
+Get error logs: `cat hyperparameter_sweep_inverse_42933839.err`
 
 ## 📁 File Transfer
 
