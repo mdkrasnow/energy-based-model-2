@@ -20,6 +20,7 @@ class CurriculumStage:
         clean_ratio: Proportion of clean (original) examples [0.0, 1.0]
         adversarial_ratio: Proportion of adversarial examples [0.0, 1.0]
         gaussian_ratio: Proportion of Gaussian noise examples [0.0, 1.0]
+        hard_negative_ratio: Proportion of energy-based hard negative examples [0.0, 1.0]
         epsilon_multiplier: Multiplier for the base epsilon value [0.0, 1.0+]
         temperature: Temperature parameter for loss scaling
         focus: Description of what this stage focuses on
@@ -28,13 +29,23 @@ class CurriculumStage:
     clean_ratio: float
     adversarial_ratio: float
     gaussian_ratio: float
+    hard_negative_ratio: float
     epsilon_multiplier: float
     temperature: float
     focus: str
 
     def __post_init__(self):
-        """Validate that ratios sum to approximately 1.0."""
-        total_ratio = self.clean_ratio + self.adversarial_ratio + self.gaussian_ratio
+        """Validate that ratios are non-negative and sum to approximately 1.0."""
+        ratios = [self.clean_ratio, self.adversarial_ratio, self.gaussian_ratio, self.hard_negative_ratio]
+        
+        # Validate all ratios are non-negative
+        for i, ratio in enumerate(ratios):
+            if ratio < 0:
+                ratio_names = ["clean_ratio", "adversarial_ratio", "gaussian_ratio", "hard_negative_ratio"]
+                raise ValueError(f"{ratio_names[i]} must be non-negative, got {ratio}")
+        
+        # Validate ratios sum to approximately 1.0
+        total_ratio = sum(ratios)
         if not (0.99 <= total_ratio <= 1.01):
             raise ValueError(f"Ratios must sum to 1.0, got {total_ratio}")
 
@@ -130,6 +141,7 @@ DEFAULT_CURRICULUM = CurriculumConfig(
             clean_ratio=1.0,
             adversarial_ratio=0.0,
             gaussian_ratio=0.0,
+            hard_negative_ratio=0.0,
             epsilon_multiplier=0.0,
             temperature=10.0,
             focus="Clean data training to establish baseline"
@@ -139,45 +151,50 @@ DEFAULT_CURRICULUM = CurriculumConfig(
             clean_ratio=0.7,
             adversarial_ratio=0.2,
             gaussian_ratio=0.1,
+            hard_negative_ratio=0.0,
             epsilon_multiplier=0.1,
             temperature=8.0,
             focus="Gentle introduction of adversarial examples"
         ),
         (0.35, 0.55): CurriculumStage(
             name="acceleration",
-            clean_ratio=0.5,
-            adversarial_ratio=0.4,
+            clean_ratio=0.4,
+            adversarial_ratio=0.3,
             gaussian_ratio=0.1,
+            hard_negative_ratio=0.2,
             epsilon_multiplier=0.3,
             temperature=5.0,
-            focus="Balanced mix with increasing adversarial strength"
+            focus="Balanced mix with introducing hard negatives"
         ),
         (0.55, 0.75): CurriculumStage(
             name="dominance",
-            clean_ratio=0.3,
-            adversarial_ratio=0.6,
+            clean_ratio=0.2,
+            adversarial_ratio=0.4,
             gaussian_ratio=0.1,
+            hard_negative_ratio=0.3,
             epsilon_multiplier=0.7,
             temperature=2.0,
-            focus="Adversarial examples become dominant"
+            focus="Hard negatives become prominent"
         ),
         (0.75, 0.90): CurriculumStage(
             name="mastery",
-            clean_ratio=0.15,
-            adversarial_ratio=0.8,
+            clean_ratio=0.1,
+            adversarial_ratio=0.4,
             gaussian_ratio=0.05,
+            hard_negative_ratio=0.45,
             epsilon_multiplier=1.0,
             temperature=1.5,
-            focus="High-strength adversarial training"
+            focus="Hard negative dominated training"
         ),
         (0.90, 1.0): CurriculumStage(
             name="fine-tuning",
-            clean_ratio=0.2,
-            adversarial_ratio=0.75,
+            clean_ratio=0.15,
+            adversarial_ratio=0.35,
             gaussian_ratio=0.05,
+            hard_negative_ratio=0.45,
             epsilon_multiplier=0.8,
             temperature=1.0,
-            focus="Final refinement with slight epsilon reduction"
+            focus="Final refinement with strong hard negatives"
         ),
     }
 )
@@ -191,45 +208,50 @@ AGGRESSIVE_CURRICULUM = CurriculumConfig(
             clean_ratio=1.0,
             adversarial_ratio=0.0,
             gaussian_ratio=0.0,
+            hard_negative_ratio=0.0,
             epsilon_multiplier=0.0,
             temperature=5.0,
             focus="Minimal clean training"
         ),
         (0.10, 0.25): CurriculumStage(
             name="rapid_introduction",
-            clean_ratio=0.5,
-            adversarial_ratio=0.4,
+            clean_ratio=0.4,
+            adversarial_ratio=0.3,
             gaussian_ratio=0.1,
+            hard_negative_ratio=0.2,
             epsilon_multiplier=0.3,
             temperature=4.0,
-            focus="Rapid adversarial introduction"
+            focus="Rapid hard negative introduction"
         ),
         (0.25, 0.50): CurriculumStage(
             name="aggressive_ramp",
-            clean_ratio=0.2,
-            adversarial_ratio=0.7,
+            clean_ratio=0.1,
+            adversarial_ratio=0.3,
             gaussian_ratio=0.1,
+            hard_negative_ratio=0.5,
             epsilon_multiplier=0.7,
             temperature=2.0,
-            focus="Aggressive adversarial ramping"
+            focus="Aggressive hard negative ramping"
         ),
         (0.50, 0.80): CurriculumStage(
             name="high_intensity",
-            clean_ratio=0.1,
-            adversarial_ratio=0.85,
+            clean_ratio=0.05,
+            adversarial_ratio=0.25,
             gaussian_ratio=0.05,
+            hard_negative_ratio=0.65,
             epsilon_multiplier=1.0,
             temperature=1.5,
-            focus="High-intensity adversarial training"
+            focus="High-intensity hard negative training"
         ),
         (0.80, 1.0): CurriculumStage(
             name="extreme_hardening",
-            clean_ratio=0.05,
-            adversarial_ratio=0.9,
+            clean_ratio=0.03,
+            adversarial_ratio=0.22,
             gaussian_ratio=0.05,
+            hard_negative_ratio=0.7,
             epsilon_multiplier=1.2,
             temperature=1.0,
-            focus="Extreme adversarial hardening"
+            focus="Extreme hard negative hardening"
         ),
     }
 )
@@ -243,6 +265,7 @@ CONSERVATIVE_CURRICULUM = CurriculumConfig(
             clean_ratio=1.0,
             adversarial_ratio=0.0,
             gaussian_ratio=0.0,
+            hard_negative_ratio=0.0,
             epsilon_multiplier=0.0,
             temperature=15.0,
             focus="Extended clean training for stable foundation"
@@ -252,45 +275,50 @@ CONSERVATIVE_CURRICULUM = CurriculumConfig(
             clean_ratio=0.85,
             adversarial_ratio=0.1,
             gaussian_ratio=0.05,
+            hard_negative_ratio=0.0,
             epsilon_multiplier=0.05,
             temperature=12.0,
             focus="Very gentle adversarial introduction"
         ),
         (0.45, 0.60): CurriculumStage(
             name="gradual_increase",
-            clean_ratio=0.7,
-            adversarial_ratio=0.25,
+            clean_ratio=0.65,
+            adversarial_ratio=0.2,
             gaussian_ratio=0.05,
+            hard_negative_ratio=0.1,
             epsilon_multiplier=0.15,
             temperature=8.0,
-            focus="Gradual adversarial increase"
+            focus="Gradual introduction of hard negatives"
         ),
         (0.60, 0.75): CurriculumStage(
             name="moderate_training",
-            clean_ratio=0.55,
-            adversarial_ratio=0.4,
+            clean_ratio=0.45,
+            adversarial_ratio=0.3,
             gaussian_ratio=0.05,
+            hard_negative_ratio=0.2,
             epsilon_multiplier=0.4,
             temperature=5.0,
-            focus="Moderate adversarial training"
+            focus="Moderate hard negative training"
         ),
         (0.75, 0.90): CurriculumStage(
             name="balanced_hardening",
-            clean_ratio=0.4,
-            adversarial_ratio=0.55,
+            clean_ratio=0.3,
+            adversarial_ratio=0.35,
             gaussian_ratio=0.05,
+            hard_negative_ratio=0.3,
             epsilon_multiplier=0.7,
             temperature=3.0,
-            focus="Balanced adversarial hardening"
+            focus="Balanced hard negative hardening"
         ),
         (0.90, 1.0): CurriculumStage(
             name="conservative_mastery",
-            clean_ratio=0.3,
-            adversarial_ratio=0.65,
+            clean_ratio=0.25,
+            adversarial_ratio=0.4,
             gaussian_ratio=0.05,
+            hard_negative_ratio=0.3,
             epsilon_multiplier=0.9,
             temperature=2.0,
-            focus="Conservative final mastery"
+            focus="Conservative hard negative mastery"
         ),
     }
 )
@@ -412,7 +440,7 @@ def create_custom_curriculum(
         stage_configs = [
             {
                 'start_pct': 0.0, 'end_pct': 0.5, 'name': 'warmup',
-                'clean_ratio': 1.0, 'adversarial_ratio': 0.0, 'gaussian_ratio': 0.0,
+                'clean_ratio': 1.0, 'adversarial_ratio': 0.0, 'gaussian_ratio': 0.0, 'hard_negative_ratio': 0.0,
                 'epsilon_multiplier': 0.0, 'temperature': 10.0,
                 'focus': 'Clean training'
             },
@@ -428,6 +456,7 @@ def create_custom_curriculum(
             clean_ratio=config['clean_ratio'],
             adversarial_ratio=config['adversarial_ratio'],
             gaussian_ratio=config['gaussian_ratio'],
+            hard_negative_ratio=config['hard_negative_ratio'],
             epsilon_multiplier=config['epsilon_multiplier'],
             temperature=config['temperature'],
             focus=config['focus']

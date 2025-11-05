@@ -6,7 +6,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-CorruptionType = Literal["clean", "adversarial", "gaussian", "standard"]
+from .energy_hard_negatives import energy_based_hard_negative_mining
+
+CorruptionType = Literal["clean", "adversarial", "gaussian", "standard", "hard_negative"]
 
 
 class DiffusionOps(Protocol):
@@ -20,6 +22,10 @@ class DiffusionOps(Protocol):
     sudoku: bool
     anm_adversarial_steps: int
     model: object  # callable like model(inp, x, t, return_both/return_energy)
+    # Hard negative mining parameters
+    hnm_num_candidates: int
+    hnm_refinement_steps: int
+    hnm_lambda_weight: float
 
 
 def _extract(a: torch.Tensor, t: torch.Tensor, x_shape) -> torch.Tensor:
@@ -34,6 +40,8 @@ def _sample_corruption_type(stage) -> CorruptionType:
         return "clean"
     if r < stage.clean_ratio + stage.adversarial_ratio:
         return "adversarial"
+    if r < stage.clean_ratio + stage.adversarial_ratio + stage.hard_negative_ratio:
+        return "hard_negative"
     return "gaussian"
 
 
@@ -256,6 +264,35 @@ def _adversarial_corruption(
 #     return x_final_flat.detach()
 
 
+def _hard_negative_corruption(
+    ops: DiffusionOps,
+    inp: torch.Tensor,
+    x_start: torch.Tensor,
+    t: torch.Tensor,
+    mask: Optional[torch.Tensor],
+    data_cond: Optional[torch.Tensor],
+    base_noise_scale: float = 3.0
+) -> torch.Tensor:
+    """
+    Generate hard negatives using energy-based hard negative mining.
+    
+    This is a wrapper around the core HNM algorithm that follows the same
+    interface as other corruption functions. HNM parameters are taken from
+    the ops object.
+    """
+    return energy_based_hard_negative_mining(
+        ops=ops,
+        inp=inp,
+        x_start=x_start,
+        t=t,
+        mask=mask,
+        data_cond=data_cond,
+        num_candidates=ops.hnm_num_candidates,
+        refinement_steps=ops.hnm_refinement_steps,
+        lambda_weight=ops.hnm_lambda_weight
+    )
+
+
 def enhanced_corruption_step_v2(
     ops: DiffusionOps,
     stage,
@@ -293,6 +330,11 @@ def enhanced_corruption_step_v2(
     elif corruption_type == "gaussian":
         noise_scale = base_noise_scale * (2.0 / max(stage.temperature, 1.0))
         x_corrupted = _gaussian_noise_corruption(ops, x_start, t, noise_scale)
+    elif corruption_type == "hard_negative":
+        # Energy-based hard negative mining
+        x_corrupted = _hard_negative_corruption(
+            ops, inp, x_start, t, mask, data_cond, base_noise_scale
+        )
     else:  # adversarial
         # Standard unconstrained adversarial corruption
         x_corrupted = _adversarial_corruption(

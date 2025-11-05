@@ -1,0 +1,70 @@
+{
+  "timestamp": "2025-11-05T12:00:00Z",
+  "plan_provided": true,
+  "strategy": "medium",
+  "diff_stats": {
+    "files_changed": 4,
+    "insertions": 122,
+    "deletions": 40
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "category": "plan-compliance",
+      "file": "diffusion_lib/energy_hard_negatives.py",
+      "line": 72,
+      "issue": "num_candidates is clamped to ops.sqrt_alphas_cumprod.shape[0] but plan expects fixed 10 landscapes",
+      "impact": "Could limit hard negative diversity if timesteps < 10",
+      "fix": "Remove or document the clamping logic, ensure 10 landscapes are always available",
+      "plan_related": true
+    },
+    {
+      "severity": "medium", 
+      "category": "correctness",
+      "file": "diffusion_lib/energy_hard_negatives.py",
+      "line": 81,
+      "issue": "Using torch.full_like(t, landscape_idx) creates same landscape index for all batch items",
+      "impact": "All batch items sample from same landscape per candidate, reducing diversity",
+      "fix": "Use torch.full((t.shape[0],), landscape_idx, device=t.device, dtype=t.dtype)",
+      "plan_related": true
+    },
+    {
+      "severity": "medium",
+      "category": "correctness", 
+      "file": "curriculum_config.py",
+      "line": 32,
+      "issue": "Ratio validation only checks sum but doesn't validate individual ratios >= 0",
+      "impact": "Could allow negative ratios which don't make sense",
+      "fix": "Add validation that all ratios are non-negative",
+      "plan_related": false
+    },
+    {
+      "severity": "low",
+      "category": "maintainability",
+      "file": "diffusion_lib/energy_hard_negatives.py", 
+      "line": 121,
+      "issue": "Broad exception handling without logging could hide important errors",
+      "impact": "Debugging issues with energy computation becomes difficult",
+      "fix": "Add logging for caught exceptions or use more specific exception types",
+      "plan_related": false
+    },
+    {
+      "severity": "low",
+      "category": "performance",
+      "file": "diffusion_lib/energy_hard_negatives.py",
+      "line": 76,
+      "issue": "Appending to list in loop then iterating over candidates is inefficient for large batches",
+      "impact": "Memory usage and selection time could be optimized",
+      "fix": "Consider batch processing or tensor operations for candidate evaluation",
+      "plan_related": false
+    }
+  ],
+  "summary": {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 2,
+    "plan_compliance_issues": 2,
+    "requires_fixes": true
+  }
+}

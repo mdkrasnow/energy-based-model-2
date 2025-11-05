@@ -69,7 +69,13 @@ parser.add_argument('--anm-temperature', type=float, default=None, help='Tempera
 parser.add_argument('--anm-clean-ratio', type=float, default=None, help='Proportion of clean examples (default: varies by curriculum stage, 0.05-1.0)')
 parser.add_argument('--anm-adversarial-ratio', type=float, default=None, help='Proportion of adversarial examples (default: varies by curriculum stage, 0.0-0.9)')
 parser.add_argument('--anm-gaussian-ratio', type=float, default=None, help='Proportion of Gaussian noise examples (default: varies by curriculum stage, 0.05-0.1)')
+parser.add_argument('--anm-hard-negative-ratio', type=float, default=None, help='Proportion of energy-based hard negative examples (default: varies by curriculum stage, 0.0-0.7)')
 parser.add_argument('--anm-warmup-steps', type=int, default=None, help='Number of warmup steps before adversarial samples (default: 10% of train steps)')
+
+# Hard negative mining specific parameters
+parser.add_argument('--hnm-num-candidates', type=int, default=10, help='Number of HNM candidates to generate (default: 10)')
+parser.add_argument('--hnm-refinement-steps', type=int, default=5, help='Energy descent steps per HNM candidate (default: 5)')
+parser.add_argument('--hnm-lambda-weight', type=float, default=1.0, help='Balance between energy and error in HNM deception score (default: 1.0)')
 
 
 if __name__ == "__main__":
@@ -299,7 +305,8 @@ if __name__ == "__main__":
         if any([FLAGS.anm_temperature is not None,
                 FLAGS.anm_clean_ratio is not None,
                 FLAGS.anm_adversarial_ratio is not None,
-                FLAGS.anm_gaussian_ratio is not None]):
+                FLAGS.anm_gaussian_ratio is not None,
+                FLAGS.anm_hard_negative_ratio is not None]):
             # Create a new curriculum config with overridden values
             modified_stages = {}
             for (start_pct, end_pct), stage in curriculum_config.stages.items():
@@ -309,6 +316,7 @@ if __name__ == "__main__":
                     clean_ratio=FLAGS.anm_clean_ratio if FLAGS.anm_clean_ratio is not None else stage.clean_ratio,
                     adversarial_ratio=FLAGS.anm_adversarial_ratio if FLAGS.anm_adversarial_ratio is not None else stage.adversarial_ratio,
                     gaussian_ratio=FLAGS.anm_gaussian_ratio if FLAGS.anm_gaussian_ratio is not None else stage.gaussian_ratio,
+                    hard_negative_ratio=FLAGS.anm_hard_negative_ratio if FLAGS.anm_hard_negative_ratio is not None else stage.hard_negative_ratio,
                     epsilon_multiplier=stage.epsilon_multiplier,  # Keep from curriculum
                     temperature=FLAGS.anm_temperature if FLAGS.anm_temperature is not None else stage.temperature,
                     focus=stage.focus + " (with overrides)"
@@ -354,6 +362,9 @@ if __name__ == "__main__":
         anm_distance_penalty=anm_distance_penalty,
         anm_warmup_steps=anm_warmup_steps,
         curriculum_config=curriculum_config,
+        hnm_num_candidates=FLAGS.hnm_num_candidates,
+        hnm_refinement_steps=FLAGS.hnm_refinement_steps,
+        hnm_lambda_weight=FLAGS.hnm_lambda_weight,
         **kwargs
     )
 

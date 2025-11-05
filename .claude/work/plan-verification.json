@@ -1,0 +1,59 @@
+{
+  "timestamp": "2025-11-05T12:00:00Z",
+  "plan_provided": true,
+  "plan_summary": "Implement energy-based hard negative mining for IRED with curriculum integration",
+  "verification": [
+    {
+      "requirement": "Hard negative mining function in denoising_diffusion_pytorch_1d.py",
+      "status": "implemented",
+      "evidence": "diffusion_lib/energy_hard_negatives.py contains energy_based_hard_negative_mining function",
+      "gaps": "None - plan referenced 'irem_baseline.py' but implementation correctly used separate module",
+      "notes": "Better organization than plan suggested by using separate module"
+    },
+    {
+      "requirement": "GaussianDiffusion1D constructor parameters for HNM",
+      "status": "implemented", 
+      "evidence": "diffusion_lib/denoising_diffusion_pytorch_1d.py:194-197 adds hnm_num_candidates, hnm_refinement_steps, hnm_lambda_weight",
+      "gaps": "None",
+      "notes": "All required parameters present with correct defaults"
+    },
+    {
+      "requirement": "Integration into corruption system",
+      "status": "implemented",
+      "evidence": "diffusion_lib/adversarial_corruption.py:267-298 adds _hard_negative_corruption and hard_negative CorruptionType",
+      "gaps": "None",
+      "notes": "Correctly integrated into existing corruption framework"
+    },
+    {
+      "requirement": "Training script command line arguments",
+      "status": "implemented",
+      "evidence": "train.py:75-78 adds --hnm-num-candidates, --hnm-refinement-steps, --hnm-lambda-weight flags",
+      "gaps": "None",
+      "notes": "All HNM parameters exposed as CLI arguments"
+    },
+    {
+      "requirement": "Curriculum configuration updates",
+      "status": "implemented",
+      "evidence": "curriculum_config.py:23 adds hard_negative_ratio field to CurriculumStage",
+      "gaps": "None", 
+      "notes": "Hard negative ratios properly integrated into all curriculum stages"
+    },
+    {
+      "requirement": "p_losses modification for contrastive training",
+      "status": "missing",
+      "evidence": "No changes found in GaussianDiffusion1D.p_losses method",
+      "gaps": "Core contrastive training logic not implemented",
+      "notes": "This is the most critical missing piece - HNM integration into training loss"
+    }
+  ],
+  "extra_changes": [
+    {
+      "file": "curriculum_config.py",
+      "change": "Updated all predefined curricula (DEFAULT, AGGRESSIVE, CONSERVATIVE) with hard_negative_ratio values",
+      "rationale": "Necessary to support the new hard negative mining feature across all curriculum types"
+    }
+  ],
+  "completeness_score": "83",
+  "implementation_quality": "good",
+  "blocking_gaps": ["Missing p_losses modification for contrastive training integration"]
+}

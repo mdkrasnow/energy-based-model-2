@@ -191,6 +191,10 @@ class GaussianDiffusion1D(nn.Module):
         anm_distance_penalty=0.1,         # Distance penalty weight (epsilon)
         anm_warmup_steps=10000,           # Warmup before adversarial samples
         curriculum_config=None,           # Optional curriculum configuration
+        # Hard negative mining parameters
+        hnm_num_candidates=10,            # Number of HNM candidates to generate
+        hnm_refinement_steps=5,           # Energy descent steps per candidate
+        hnm_lambda_weight=1.0,            # Balance between energy and error
     ):
         super().__init__()
         self.model = model
@@ -206,6 +210,11 @@ class GaussianDiffusion1D(nn.Module):
         self.anm_adversarial_steps = anm_adversarial_steps
         self.anm_distance_penalty = anm_distance_penalty
         self.anm_warmup_steps = anm_warmup_steps
+        
+        # Store hard negative mining parameters
+        self.hnm_num_candidates = hnm_num_candidates
+        self.hnm_refinement_steps = hnm_refinement_steps
+        self.hnm_lambda_weight = hnm_lambda_weight
         
         # Track training progress
         self.training_step = 0
