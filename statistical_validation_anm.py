@@ -13,6 +13,7 @@ import os
 import subprocess
 import argparse
 import json
+import errno
 from pathlib import Path
 import time
 import re
@@ -76,11 +77,177 @@ ANM_CONFIGS = [
 
 
 class StatisticalValidator:
-    def __init__(self, base_dir='experiments_statistical'):
+    def __init__(self, base_dir=None):
+        """
+        base_dir:
+          - If provided, use it as-is.
+          - If None, default to:
+              $STATISTICAL_EXPERIMENT_DIR or 'experiments_statistical'
+        """
+        if base_dir is None:
+            base_dir = os.environ.get("STATISTICAL_EXPERIMENT_DIR", "experiments_statistical")
+            if not base_dir:  # Handle empty string case
+                base_dir = "experiments_statistical"
+
         self.base_dir = Path(base_dir)
-        self.base_dir.mkdir(exist_ok=True)
+        if not self._robust_mkdir(self.base_dir):
+            raise OSError(f"Failed to create base directory: {self.base_dir}")
+
         self.results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
         self.statistical_results = {}
+
+    def _robust_mkdir(self, dir_path, max_retries=3):
+        """Robustly create directory, handling stale file handles on network filesystems."""
+        if dir_path is None:
+            return False
+
+        path = Path(dir_path)
+
+        for attempt in range(max_retries):
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+                return True
+            except OSError as e:
+                if e.errno == errno.ESTALE:  # Stale file handle
+                    if attempt < max_retries - 1:
+                        # Refresh the path object and retry with exponential backoff
+                        try:
+                            path = Path(str(dir_path)).resolve()
+                        except OSError:
+                            # If resolve() also fails, just recreate the path
+                            path = Path(str(dir_path))
+                        
+                        wait_time = 0.1 * (2 ** attempt)
+                        print(f"Warning: Stale file handle for directory {dir_path}, retrying in {wait_time:.1f}s...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"Error: Failed to create directory after {max_retries} retries: {dir_path}")
+                        return False
+                else:
+                    # Re-raise other OSErrors (permissions, disk errors, etc.)
+                    raise
+
+        return False  # Should not reach here, but safe fallback
+
+    def _robust_file_exists(self, file_path, max_retries=3):
+        """Robustly check if file exists, handling stale file handles on network filesystems"""
+        if file_path is None:
+            return False
+            
+        path = Path(file_path)
+        
+        for attempt in range(max_retries):
+            try:
+                return path.exists()
+            except OSError as e:
+                if e.errno == errno.ESTALE:  # Stale file handle
+                    if attempt < max_retries - 1:
+                        # Refresh the path object and retry with exponential backoff
+                        try:
+                            path = Path(str(file_path)).resolve()
+                        except OSError:
+                            # If resolve() also fails, just recreate the path
+                            path = Path(str(file_path))
+                        
+                        wait_time = 0.1 * (2 ** attempt)
+                        print(f"Warning: Stale file handle for {file_path}, retrying in {wait_time:.1f}s...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"Error: Failed to check file existence after {max_retries} retries: {file_path}")
+                        return False
+                else:
+                    # Re-raise other OSErrors (permissions, disk errors, etc.)
+                    raise
+        
+        return False  # Should not reach here, but safe fallback
+
+    def _robust_write_file(self, file_path, content, mode='w', max_retries=3, **kwargs):
+        """Robustly write file, handling stale file handles on network filesystems"""
+        if file_path is None:
+            return False
+            
+        path = Path(file_path)
+        
+        # Ensure parent directory exists with robust mkdir
+        if not self._robust_mkdir(path.parent):
+            print(f"Error: Failed to create parent directory for {file_path}")
+            return False
+        
+        for attempt in range(max_retries):
+            try:
+                with open(path, mode, **kwargs) as f:
+                    if isinstance(content, str):
+                        f.write(content)
+                    elif hasattr(content, 'items'):  # Dictionary for JSON
+                        import json
+                        json.dump(content, f, indent=2)
+                    else:
+                        f.write(content)
+                return True
+            except OSError as e:
+                if e.errno == errno.ESTALE:  # Stale file handle
+                    if attempt < max_retries - 1:
+                        # Refresh the path object and retry with exponential backoff
+                        try:
+                            path = Path(str(file_path)).resolve()
+                        except OSError:
+                            # If resolve() also fails, just recreate the path
+                            path = Path(str(file_path))
+                        
+                        wait_time = 0.1 * (2 ** attempt)
+                        print(f"Warning: Stale file handle for file {file_path}, retrying in {wait_time:.1f}s...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"Error: Failed to write file after {max_retries} retries: {file_path}")
+                        return False
+                else:
+                    # Re-raise other OSErrors (permissions, disk errors, etc.)
+                    raise
+        
+        return False  # Should not reach here, but safe fallback
+
+    def _robust_savefig(self, file_path, max_retries=3, **kwargs):
+        """Robustly save matplotlib figure, handling stale file handles on network filesystems"""
+        if file_path is None:
+            return False
+            
+        path = Path(file_path)
+        
+        # Ensure parent directory exists with robust mkdir
+        if not self._robust_mkdir(path.parent):
+            print(f"Error: Failed to create parent directory for {file_path}")
+            return False
+        
+        for attempt in range(max_retries):
+            try:
+                import matplotlib.pyplot as plt
+                plt.savefig(path, **kwargs)
+                return True
+            except OSError as e:
+                if e.errno == errno.ESTALE:  # Stale file handle
+                    if attempt < max_retries - 1:
+                        # Refresh the path object and retry with exponential backoff
+                        try:
+                            path = Path(str(file_path)).resolve()
+                        except OSError:
+                            # If resolve() also fails, just recreate the path
+                            path = Path(str(file_path))
+                        
+                        wait_time = 0.1 * (2 ** attempt)
+                        print(f"Warning: Stale file handle for plot {file_path}, retrying in {wait_time:.1f}s...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"Error: Failed to save plot after {max_retries} retries: {file_path}")
+                        return False
+                else:
+                    # Re-raise other OSErrors (permissions, disk errors, etc.)
+                    raise
+        
+        return False  # Should not reach here, but safe fallback
         
     def get_result_dir(self, dataset, model_type='baseline', epsilon=None, adv_steps=None, 
                       distance_penalty=None, seed=None):
@@ -101,7 +268,7 @@ class StatisticalValidator:
         result_dir = self.get_result_dir(dataset, model_type, epsilon, adv_steps, distance_penalty, seed)
         
         # Check if model already exists
-        if not force_retrain and os.path.exists(f'{result_dir}/model-50.pt'):
+        if not force_retrain and self._robust_file_exists(f'{result_dir}/model-50.pt'):
             print(f"\n{'='*80}")
             print(f"Model for {dataset} ({model_type}, seed={seed}) already exists. Skipping training.")
             print(f"Use --force to retrain.")
@@ -198,7 +365,7 @@ class StatisticalValidator:
         result_dir = self.get_result_dir(dataset, model_type, epsilon, adv_steps, distance_penalty, seed)
         
         # Check if model exists
-        if not os.path.exists(f'{result_dir}/model-50.pt'):
+        if not self._robust_file_exists(f'{result_dir}/model-50.pt'):
             print(f"\n{'='*80}")
             print(f"ERROR: No trained model found for {dataset} ({model_type}, seed={seed})")
             print(f"Expected location: {result_dir}/model-50.pt")
@@ -502,7 +669,9 @@ class StatisticalValidator:
         sys.stdout.flush()
         
         viz_dir = self.base_dir / 'visualizations'
-        viz_dir.mkdir(exist_ok=True)
+        if not self._robust_mkdir(viz_dir):
+            print(f"Error: Failed to create visualization directory: {viz_dir}")
+            return
         
         for dataset in TASKS:
             # Check if raw results exist for this dataset
@@ -660,10 +829,11 @@ class StatisticalValidator:
                 # Save figure
                 filename = f'{dataset}_{difficulty}_boxplot.png'
                 filepath = viz_dir / filename
-                plt.savefig(filepath, dpi=300, bbox_inches='tight')
+                if self._robust_savefig(filepath, dpi=300, bbox_inches='tight'):
+                    print(f"Saved: {filepath}")
+                else:
+                    print(f"Failed to save: {filepath}")
                 plt.close()
-                
-                print(f"Saved: {filepath}")
         
         print(f"\n{'#'*80}\n")
         sys.stdout.flush()
@@ -1022,10 +1192,10 @@ class StatisticalValidator:
             'statistical_analysis': dict(self.statistical_results)
         }
         
-        with open(json_path, 'w') as f:
-            json.dump(results_dict, f, indent=2)
-        
-        print(f"Results saved to: {json_path}\n")
+        if self._robust_write_file(json_path, results_dict):
+            print(f"Results saved to: {json_path}\n")
+        else:
+            print(f"Failed to save results to: {json_path}\n")
         sys.stdout.flush()
         
         return json_path

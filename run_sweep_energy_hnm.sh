@@ -33,6 +33,9 @@ pip install --user -q torch torchvision einops accelerate tqdm \
 
 echo "Dependencies installed successfully"
 
+# Set experiment directory to scratch storage (avoid NFS issues)
+export ENERGY_HNM_EXPERIMENT_DIR="/n/holyscratch01/mkrasnow/experiments_energy_hnm"
+
 # Run the energy HNM hyperparameter sweep
 python sweep_energy_hnm_hyperparameters.py
 

@@ -11,9 +11,13 @@ Running:
 RUN THIS BEFORE SSHing ONTO THE SERVER: Update file: `scp evaluate_specific_configs.py mkrasnow@login.rc.fas.harvard.edu:~/evaluate_specific_configs.py`
 
 scp analyze_distance_penalty_effects.py mkrasnow@login.rc.fas.harvard.edu:~/analyze_distance_penalty_effects.py
+
 scp statistical_validation_anm.py mkrasnow@login.rc.fas.harvard.edu:~/statistical_validation_anm.py
+
 scp run_statistical_validation_anm.sh mkrasnow@login.rc.fas.harvard.edu:~/run_statistical_validation_anm.sh
+
 scp run_sweep_energy_hnm.sh mkrasnow@login.rc.fas.harvard.edu:~/run_sweep_energy_hnm.sh
+
 scp sweep_energy_hnm_hyperparameters.py mkrasnow@login.rc.fas.harvard.edu:~/sweep_energy_hnm_hyperparameters.py
 
 sbatch run_statistical_validation_anm.sh

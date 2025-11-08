@@ -56,10 +56,22 @@ TASKS = ['inverse', 'lowrank']
 class EnergyHNMSweepRunner:
     """Experimental runner for Energy-Based Hard Negative Mining hyperparameter sweep"""
     
-    def __init__(self, base_dir='experiments_energy_hnm'):
+    def __init__(self, base_dir=None):
+        """
+        base_dir:
+          - If provided, use it as-is.
+          - If None, default to:
+              $ENERGY_HNM_EXPERIMENT_DIR or 'experiments_energy_hnm'
+        """
+        if base_dir is None:
+            base_dir = os.environ.get("ENERGY_HNM_EXPERIMENT_DIR",
+                                      "experiments_energy_hnm")
+
         self.base_dir = Path(base_dir)
+
         if not self._robust_mkdir(self.base_dir):
-            raise OSError(f"Failed to create base directory: {base_dir}")
+            raise OSError(f"Failed to create base directory: {self.base_dir}")
+
         self.sweep_results = []
         self.diagnostic_data = defaultdict(dict)
     
@@ -967,33 +979,14 @@ class EnergyHNMSweepRunner:
                     print(f"   Deception score: {r['diagnostics']['avg_deception_score']:.4f}")
                     print(f"   Energy vs clean: {r['diagnostics']['energy_vs_clean']:.2f}x")
     
-    def save_results_json(self):
-        """Save complete results to JSON file"""
-        output_file = self.base_dir / 'energy_hnm_sweep_results.json'
-        
-        data = {
-            'metadata': {
-                'tasks': TASKS,
-                'train_iterations': TRAIN_ITERATIONS,
-                'batch_size': BATCH_SIZE,
-                'learning_rate': LEARNING_RATE,
-                'diffusion_steps': DIFFUSION_STEPS,
-                'rank': RANK,
-                'hyperparameter_space': {
-                    'num_candidates': NUM_CANDIDATES_OPTIONS,
-                    'refinement_steps': REFINEMENT_STEPS_OPTIONS,
-                    'lambda_weight': LAMBDA_WEIGHT_OPTIONS,
-                },
-                'total_configs_per_task': len(NUM_CANDIDATES_OPTIONS) * len(REFINEMENT_STEPS_OPTIONS) * len(LAMBDA_WEIGHT_OPTIONS),
-                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-            },
-            'results': self.sweep_results,
-        }
-        
-        if self._robust_write_file(output_file, data):
-            print(f"\n✓ Results saved to: {output_file}")
-        else:
-            print(f"\n✗ Failed to save results to: {output_file}")
+    def save_results_json(self, filename="energy_hnm_sweep_results.json"):
+        """
+        Save sweep results to JSON using robust file writing.
+        Called from run_complete_sweep().
+        """
+        output_path = Path(self.base_dir) / filename
+        if not self._robust_write_file(output_path, self.sweep_results):
+            raise OSError(f"Failed to write sweep results to {output_path}")
     
     def generate_heatmaps(self):
         """Generate heatmap visualizations of hyperparameter performance"""
@@ -1346,8 +1339,8 @@ class EnergyHNMSweepRunner:
 
 def main():
     parser = argparse.ArgumentParser(description='Energy-Based HNM Hyperparameter Sweep')
-    parser.add_argument('--base-dir', default='experiments_energy_hnm', 
-                       help='Base directory for experiments')
+    parser.add_argument('--base-dir', default=None, 
+                       help='Base directory for experiments (default: $ENERGY_HNM_EXPERIMENT_DIR or experiments_energy_hnm)')
     parser.add_argument('--force', action='store_true', 
                        help='Force retrain even if models exist')
     args = parser.parse_args()

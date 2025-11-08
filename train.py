@@ -15,6 +15,8 @@ from reasoning_dataset import FamilyTreeDataset, GraphConnectivityDataset, Famil
 from planning_dataset import PlanningDataset, PlanningDatasetOnline
 from sat_dataset import SATNetDataset, SudokuDataset, SudokuRRNDataset, SudokuRRNLatentDataset
 import torch
+import numpy as np
+import random
 
 import argparse
 
@@ -34,6 +36,15 @@ def str2bool(x):
     elif x[0] in ['1', 'y', 't']:
         return True
     raise ValueError('Invalid value: {}'.format(x))
+
+
+def set_random_seed(seed):
+    """Set random seed for reproducibility across all libraries."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 parser = argparse.ArgumentParser(description='Train Diffusion Reasoning Model')
@@ -77,9 +88,15 @@ parser.add_argument('--hnm-num-candidates', type=int, default=10, help='Number o
 parser.add_argument('--hnm-refinement-steps', type=int, default=5, help='Energy descent steps per HNM candidate (default: 5)')
 parser.add_argument('--hnm-lambda-weight', type=float, default=1.0, help='Balance between energy and error in HNM deception score (default: 1.0)')
 
+# Random seed for reproducibility
+parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility (default: 42)')
+
 
 if __name__ == "__main__":
     FLAGS = parser.parse_args()
+    
+    # Set random seed for reproducibility
+    set_random_seed(FLAGS.seed)
 
     validation_dataset = None
     extra_validation_datasets = dict()
