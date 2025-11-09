@@ -22,6 +22,53 @@ echo "GPU allocated: $CUDA_VISIBLE_DEVICES"
 module load python/3.10.9-fasrc01
 module load cuda/12.2.0-fasrc01
 
+# Create a per-job scratch directory and move into it
+# Try multiple scratch directory options in order of preference
+SCRATCH_OPTIONS=(
+    "/n/holyscratch01/$USER"
+    "/scratch/$USER" 
+    "/tmp"
+)
+
+echo "Attempting to find suitable scratch directory..."
+SCRATCH_BASE=""
+for scratch_path in "${SCRATCH_OPTIONS[@]}"; do
+    echo "  Trying: $scratch_path"
+    if [ -d "$scratch_path" ] && [ -w "$scratch_path" ]; then
+        SCRATCH_BASE="$scratch_path"
+        echo "  ✓ Found writable scratch at: $SCRATCH_BASE"
+        break
+    elif mkdir -p "$scratch_path" 2>/dev/null; then
+        SCRATCH_BASE="$scratch_path"
+        echo "  ✓ Created scratch directory at: $SCRATCH_BASE"
+        break
+    else
+        echo "  ✗ Cannot use: $scratch_path"
+    fi
+done
+
+if [ -z "$SCRATCH_BASE" ]; then
+    echo "ERROR: Could not find or create any scratch directory!"
+    echo "Tried: ${SCRATCH_OPTIONS[*]}"
+    exit 1
+fi
+
+# Create job-specific subdirectory
+export SCRATCH_JOB_DIR="$SCRATCH_BASE/sweep_energy_hnm_${SLURM_JOB_ID}"
+mkdir -p "$SCRATCH_JOB_DIR"
+if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to create job directory: $SCRATCH_JOB_DIR"
+    exit 1
+fi
+
+cd "$SCRATCH_JOB_DIR"
+if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to change to job directory: $SCRATCH_JOB_DIR"
+    exit 1
+fi
+
+echo "Working directory: $(pwd)"
+
 # Add local bin to PATH for installed scripts
 export PATH="$HOME/.local/bin:$PATH"
 
@@ -34,9 +81,21 @@ pip install --user -q torch torchvision einops accelerate tqdm \
 echo "Dependencies installed successfully"
 
 # Set experiment directory to scratch storage (avoid NFS issues)
-export ENERGY_HNM_EXPERIMENT_DIR="/n/holyscratch01/mkrasnow/experiments_energy_hnm"
+# Use the same scratch base that we validated above
+export ENERGY_HNM_EXPERIMENT_DIR="$SCRATCH_BASE/experiments_energy_hnm"
+echo "Experiment directory: $ENERGY_HNM_EXPERIMENT_DIR"
 
-# Run the energy HNM hyperparameter sweep
-python sweep_energy_hnm_hyperparameters.py
+# Ensure experiment directory exists
+mkdir -p "$ENERGY_HNM_EXPERIMENT_DIR"
+if [ $? -ne 0 ]; then
+    echo "WARNING: Could not create experiment directory: $ENERGY_HNM_EXPERIMENT_DIR"
+    echo "Python script will attempt to create it with robust error handling"
+fi
+
+# Ensure torch._dynamo uses a valid debug directory
+export TORCH_COMPILE_DEBUG_DIR="$SCRATCH_JOB_DIR"
+
+# Run the energy HNM hyperparameter sweep from scratch
+python /n/home03/mkrasnow/sweep_energy_hnm_hyperparameters.py
 
 echo "Job finished at: $(date)"

@@ -549,6 +549,7 @@ class ExperimentRunner:
                 '--anm-clean-ratio', '0.1',
                 '--anm-adversarial-ratio', '0.8',
                 '--anm-gaussian-ratio', '0.1',
+                '--anm-hard-negative-ratio', '0.0',
                 # HNM parameters (used when curriculum includes hard_negative_ratio > 0)
                 '--hnm-num-candidates', str(hnm_num_candidates),
                 '--hnm-refinement-steps', str(hnm_refinement_steps),

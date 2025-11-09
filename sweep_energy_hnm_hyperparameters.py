@@ -162,6 +162,9 @@ class EnergyHNMSweepRunner:
                     elif hasattr(content, 'items'):  # Dictionary for JSON
                         import json
                         json.dump(content, f, indent=2)
+                    elif isinstance(content, (list, tuple)):  # List/tuple for JSON
+                        import json
+                        json.dump(content, f, indent=2)
                     else:
                         f.write(content)
                 return True
@@ -344,7 +347,6 @@ class EnergyHNMSweepRunner:
             '--rank', str(RANK),
             '--train-steps', str(TRAIN_ITERATIONS),
             '--use-anm',  # Enable corruption replacement
-            '--anm-use-energy-hnm',  # Use energy-based HNM instead of adversarial
             '--hnm-num-candidates', str(num_candidates),
             '--hnm-refinement-steps', str(refinement_steps),
             '--hnm-lambda-weight', str(lambda_weight),
@@ -415,7 +417,6 @@ class EnergyHNMSweepRunner:
         if model_type == 'energy_hnm':
             cmd.extend([
                 '--use-anm',
-                '--anm-use-energy-hnm',
                 '--hnm-num-candidates', str(num_candidates),
                 '--hnm-refinement-steps', str(refinement_steps),
                 '--hnm-lambda-weight', str(lambda_weight),

@@ -408,6 +408,7 @@ class ExperimentRunner:
                 '--anm-clean-ratio', '0.1',
                 '--anm-adversarial-ratio', '0.8',
                 '--anm-gaussian-ratio', '0.1',
+                '--anm-hard-negative-ratio', '0.0',
             ])
         
         # Run training with real-time output

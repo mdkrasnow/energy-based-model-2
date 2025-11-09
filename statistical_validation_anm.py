@@ -179,12 +179,12 @@ class StatisticalValidator:
             try:
                 with open(path, mode, **kwargs) as f:
                     if isinstance(content, str):
-                        f.write(content)
+                        content.append(content)
                     elif hasattr(content, 'items'):  # Dictionary for JSON
                         import json
                         json.dump(content, f, indent=2)
                     else:
-                        f.write(content)
+                        content.append(content)
                 return True
             except OSError as e:
                 if e.errno == errno.ESTALE:  # Stale file handle
@@ -317,6 +317,7 @@ class StatisticalValidator:
                 '--anm-clean-ratio', '0.1',
                 '--anm-adversarial-ratio', '0.8',
                 '--anm-gaussian-ratio', '0.1',
+                '--anm-hard-negative-ratio', '0.0',
             ])
         
         # Run training with real-time output
@@ -847,68 +848,69 @@ class StatisticalValidator:
         
         report_path = self.base_dir / 'statistical_validation_report.md'
         
-        with open(report_path, 'w') as f:
-            f.write("# Statistical Validation of Adversarial Negative Mining (ANM) Configurations\n\n")
-            f.write(f"**Date:** {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            f.write(f"**Training Iterations:** {TRAIN_ITERATIONS}\n\n")
-            f.write(f"**Random Seeds:** {', '.join(map(str, RANDOM_SEEDS))}\n\n")
-            f.write(f"**Number of Trials:** {len(RANDOM_SEEDS)}\n\n")
+        # Build content as string first, then write with robust method
+        content = []
+        content.append("# Statistical Validation of Adversarial Negative Mining (ANM) Configurations\n\n")
+        content.append(f"**Date:** {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        content.append(f"**Training Iterations:** {TRAIN_ITERATIONS}\n\n")
+        content.append(f"**Random Seeds:** {', '.join(map(str, RANDOM_SEEDS))}\n\n")
+        content.append(f"**Number of Trials:** {len(RANDOM_SEEDS)}\n\n")
+        
+        content.append("## Experimental Setup\n\n")
+        content.append("This report presents a rigorous statistical validation of four ANM hyperparameter configurations ")
+        content.append("compared against the baseline IRED method. Each configuration was trained and evaluated 5 times ")
+        content.append("with different random seeds to assess the statistical significance of observed improvements.\n\n")
+        
+        content.append("### Tested Configurations\n\n")
+        content.append("| Configuration | Epsilon | Adversarial Steps | Distance Penalty |\n")
+        content.append("|--------------|---------|-------------------|------------------|\n")
+        content.append("| Baseline (IRED) | N/A | N/A | N/A |\n")
+        for config in ANM_CONFIGS:
+            content.append(f"| {config['name']} | {config['epsilon']} | {config['adv_steps']} | {config['distance_penalty']} |\n")
+        content.append("\n")
+        
+        content.append("### Tasks\n\n")
+        content.append("- **Matrix Inverse** (inverse): Predicting matrix inverses\n")
+        content.append("- **Matrix Completion** (lowrank): Low-rank matrix completion\n\n")
+        
+        content.append("### Evaluation Settings\n\n")
+        content.append("- **Same Difficulty:** Test on same distribution as training\n")
+        content.append("- **Harder Difficulty (OOD):** Test on out-of-distribution harder problems\n\n")
+        
+        content.append("---\n\n")
+        
+        # Results for each task
+        for dataset in TASKS:
+            # Check if statistical results exist for this dataset
+            if dataset not in self.statistical_results or 'baseline' not in self.statistical_results[dataset]:
+                task_name = "Matrix Inverse" if dataset == 'inverse' else "Matrix Completion"
+                content.append(f"## {task_name} Results\n\n")
+                content.append("*No statistical results available for this dataset.*\n\n")
+                content.append("---\n\n")
+                continue
             
-            f.write("## Experimental Setup\n\n")
-            f.write("This report presents a rigorous statistical validation of four ANM hyperparameter configurations ")
-            f.write("compared against the baseline IRED method. Each configuration was trained and evaluated 5 times ")
-            f.write("with different random seeds to assess the statistical significance of observed improvements.\n\n")
-            
-            f.write("### Tested Configurations\n\n")
-            f.write("| Configuration | Epsilon | Adversarial Steps | Distance Penalty |\n")
-            f.write("|--------------|---------|-------------------|------------------|\n")
-            f.write("| Baseline (IRED) | N/A | N/A | N/A |\n")
-            for config in ANM_CONFIGS:
-                f.write(f"| {config['name']} | {config['epsilon']} | {config['adv_steps']} | {config['distance_penalty']} |\n")
-            f.write("\n")
-            
-            f.write("### Tasks\n\n")
-            f.write("- **Matrix Inverse** (inverse): Predicting matrix inverses\n")
-            f.write("- **Matrix Completion** (lowrank): Low-rank matrix completion\n\n")
-            
-            f.write("### Evaluation Settings\n\n")
-            f.write("- **Same Difficulty:** Test on same distribution as training\n")
-            f.write("- **Harder Difficulty (OOD):** Test on out-of-distribution harder problems\n\n")
-            
-            f.write("---\n\n")
-            
-            # Results for each task
-            for dataset in TASKS:
-                # Check if statistical results exist for this dataset
-                if dataset not in self.statistical_results or 'baseline' not in self.statistical_results[dataset]:
-                    task_name = "Matrix Inverse" if dataset == 'inverse' else "Matrix Completion"
-                    f.write(f"## {task_name} Results\n\n")
-                    f.write("*No statistical results available for this dataset.*\n\n")
-                    f.write("---\n\n")
-                    continue
-                    
-                # Check if baseline statistical results exist
-                baseline_stats = self.statistical_results[dataset].get('baseline', {})
-                if 'same_difficulty' not in baseline_stats or 'harder_difficulty' not in baseline_stats:
-                    task_name = "Matrix Inverse" if dataset == 'inverse' else "Matrix Completion"
-                    f.write(f"## {task_name} Results\n\n")
-                    f.write("*Incomplete baseline statistical results for this dataset.*\n\n")
-                    f.write("---\n\n")
-                    continue
+            # Check if baseline statistical results exist
+            baseline_stats = self.statistical_results[dataset].get('baseline', {})
+            if 'same_difficulty' not in baseline_stats or 'harder_difficulty' not in baseline_stats:
+                task_name = "Matrix Inverse" if dataset == 'inverse' else "Matrix Completion"
+                content.append(f"## {task_name} Results\n\n")
+                content.append("*Incomplete baseline statistical results for this dataset.*\n\n")
+                content.append("---\n\n")
+                continue
                 
                 task_name = "Matrix Inverse" if dataset == 'inverse' else "Matrix Completion"
-                f.write(f"## {task_name} Results\n\n")
+                content.append(f"## {task_name} Results\n\n")
                 
                 # Summary table
-                f.write("### Performance Summary\n\n")
-                f.write("| Configuration | Same Difficulty MSE | Harder Difficulty MSE |\n")
-                f.write("|--------------|---------------------|----------------------|\n")
+                content.append("### Performance Summary\n\n")
+                content.append("| Configuration | Same Difficulty MSE | Harder Difficulty MSE |\n")
+                content.append("|--------------|---------------------|----------------------|\n")
                 
                 # Baseline
                 baseline_same = baseline_stats['same_difficulty']
                 baseline_harder = baseline_stats['harder_difficulty']
-                f.write(f"| Baseline | {baseline_same['mean']:.6f} ± {baseline_same['std']:.6f} | ")
-                f.write(f"{baseline_harder['mean']:.6f} ± {baseline_harder['std']:.6f} |\n")
+                content.append(f"| Baseline | {baseline_same['mean']:.6f} ± {baseline_same['std']:.6f} | ")
+                content.append(f"{baseline_harder['mean']:.6f} ± {baseline_harder['std']:.6f} |\n")
                 
                 # ANM configs
                 for config in ANM_CONFIGS:
@@ -919,24 +921,24 @@ class StatisticalValidator:
                         # Check if both difficulty levels exist
                         if 'same_difficulty' not in config_stats or 'harder_difficulty' not in config_stats:
                             config_label = f"{config_name}"
-                            f.write(f"| {config_label} | *Incomplete data* | *Incomplete data* |\n")
+                            content.append(f"| {config_label} | *Incomplete data* | *Incomplete data* |\n")
                             continue
                         
                         same_stats = config_stats['same_difficulty']
                         harder_stats = config_stats['harder_difficulty']
                         
                         config_label = f"{config_name}"
-                        f.write(f"| {config_label} | {same_stats['mean']:.6f} ± {same_stats['std']:.6f} | ")
-                        f.write(f"{harder_stats['mean']:.6f} ± {harder_stats['std']:.6f} |\n")
-                f.write("\n")
+                        content.append(f"| {config_label} | {same_stats['mean']:.6f} ± {same_stats['std']:.6f} | ")
+                        content.append(f"{harder_stats['mean']:.6f} ± {harder_stats['std']:.6f} |\n")
+                content.append("\n")
                 
                 # Statistical significance table
-                f.write("### Statistical Significance Tests\n\n")
-                f.write("Paired t-tests comparing each ANM configuration against baseline (5 paired samples).\n\n")
+                content.append("### Statistical Significance Tests\n\n")
+                content.append("Paired t-tests comparing each ANM configuration against baseline (5 paired samples).\n\n")
                 
-                f.write("#### Same Difficulty\n\n")
-                f.write("| Configuration | Improvement | p-value | Cohen's d | Significant? |\n")
-                f.write("|--------------|-------------|---------|-----------|-------------|\n")
+                content.append("#### Same Difficulty\n\n")
+                content.append("| Configuration | Improvement | p-value | Cohen's d | Significant? |\n")
+                content.append("|--------------|-------------|---------|-----------|-------------|\n")
                 
                 for config in ANM_CONFIGS:
                     config_name = config['name']
@@ -945,7 +947,7 @@ class StatisticalValidator:
                         
                         # Check if same difficulty stats exist
                         if 'same_difficulty' not in config_stats:
-                            f.write(f"| {config_name} | *No data* | *No data* | *No data* | *No data* |\n")
+                            content.append(f"| {config_name} | *No data* | *No data* | *No data* | *No data* |\n")
                             continue
                             
                         stats_same = config_stats['same_difficulty']
@@ -963,13 +965,13 @@ class StatisticalValidator:
                         elif p_val < 0.05:
                             sig_marker = "*"
                         
-                        f.write(f"| {config_name} | {improvement:+.2f}% | {p_val:.6f}{sig_marker} | {cohens_d:.4f} | {sig} |\n")
-                f.write("\n")
-                f.write("*Significance levels: *** p<0.001, ** p<0.01, * p<0.05*\n\n")
+                        content.append(f"| {config_name} | {improvement:+.2f}% | {p_val:.6f}{sig_marker} | {cohens_d:.4f} | {sig} |\n")
+                content.append("\n")
+                content.append("*Significance levels: *** p<0.001, ** p<0.01, * p<0.05*\n\n")
                 
-                f.write("#### Harder Difficulty (OOD)\n\n")
-                f.write("| Configuration | Improvement | p-value | Cohen's d | Significant? |\n")
-                f.write("|--------------|-------------|---------|-----------|-------------|\n")
+                content.append("#### Harder Difficulty (OOD)\n\n")
+                content.append("| Configuration | Improvement | p-value | Cohen's d | Significant? |\n")
+                content.append("|--------------|-------------|---------|-----------|-------------|\n")
                 
                 for config in ANM_CONFIGS:
                     config_name = config['name']
@@ -978,7 +980,7 @@ class StatisticalValidator:
                         
                         # Check if harder difficulty stats exist
                         if 'harder_difficulty' not in config_stats:
-                            f.write(f"| {config_name} | *No data* | *No data* | *No data* | *No data* |\n")
+                            content.append(f"| {config_name} | *No data* | *No data* | *No data* | *No data* |\n")
                             continue
                             
                         stats_harder = config_stats['harder_difficulty']
@@ -996,21 +998,21 @@ class StatisticalValidator:
                         elif p_val < 0.05:
                             sig_marker = "*"
                         
-                        f.write(f"| {config_name} | {improvement:+.2f}% | {p_val:.6f}{sig_marker} | {cohens_d:.4f} | {sig} |\n")
-                f.write("\n")
-                f.write("*Significance levels: *** p<0.001, ** p<0.01, * p<0.05*\n\n")
+                        content.append(f"| {config_name} | {improvement:+.2f}% | {p_val:.6f}{sig_marker} | {cohens_d:.4f} | {sig} |\n")
+                content.append("\n")
+                content.append("*Significance levels: *** p<0.001, ** p<0.01, * p<0.05*\n\n")
                 
                 # Visualizations
-                f.write("### Visualizations\n\n")
-                f.write(f"![{task_name} Same Difficulty](visualizations/{dataset}_same_difficulty_boxplot.png)\n\n")
-                f.write(f"![{task_name} Harder Difficulty](visualizations/{dataset}_harder_difficulty_boxplot.png)\n\n")
+                content.append("### Visualizations\n\n")
+                content.append(f"![{task_name} Same Difficulty](visualizations/{dataset}_same_difficulty_boxplot.png)\n\n")
+                content.append(f"![{task_name} Harder Difficulty](visualizations/{dataset}_harder_difficulty_boxplot.png)\n\n")
                 
-                f.write("---\n\n")
+                content.append("---\n\n")
             
             # Overall conclusions
-            f.write("## Overall Conclusions\n\n")
+            content.append("## Overall Conclusions\n\n")
             
-            f.write("### Summary of Statistical Significance\n\n")
+            content.append("### Summary of Statistical Significance\n\n")
             
             for dataset in TASKS:
                 # Skip datasets with no statistical results
@@ -1018,7 +1020,7 @@ class StatisticalValidator:
                     continue
                     
                 task_name = "Matrix Inverse" if dataset == 'inverse' else "Matrix Completion"
-                f.write(f"**{task_name}:**\n\n")
+                content.append(f"**{task_name}:**\n\n")
                 
                 for config in ANM_CONFIGS:
                     config_name = config['name']
@@ -1027,7 +1029,7 @@ class StatisticalValidator:
                         
                         # Check if both difficulty stats exist
                         if 'same_difficulty' not in config_stats or 'harder_difficulty' not in config_stats:
-                            f.write(f"- **{config_name}**: *Incomplete data*\n")
+                            content.append(f"- **{config_name}**: *Incomplete data*\n")
                             continue
                         
                         same_stats = config_stats['same_difficulty']
@@ -1038,12 +1040,12 @@ class StatisticalValidator:
                         same_imp = same_stats['improvement_percent']
                         harder_imp = harder_stats['improvement_percent']
                         
-                        f.write(f"- **{config_name}**:\n")
-                        f.write(f"  - Same Difficulty: {same_imp:+.2f}% ({'✅ Significant' if same_sig else '❌ Not Significant'})\n")
-                        f.write(f"  - Harder Difficulty: {harder_imp:+.2f}% ({'✅ Significant' if harder_sig else '❌ Not Significant'})\n")
-                f.write("\n")
+                        content.append(f"- **{config_name}**:\n")
+                        content.append(f"  - Same Difficulty: {same_imp:+.2f}% ({'✅ Significant' if same_sig else '❌ Not Significant'})\n")
+                        content.append(f"  - Harder Difficulty: {harder_imp:+.2f}% ({'✅ Significant' if harder_sig else '❌ Not Significant'})\n")
+                content.append("\n")
             
-            f.write("### Key Findings\n\n")
+            content.append("### Key Findings\n\n")
             
             # Find best performing configuration
             best_configs = {}
@@ -1083,26 +1085,26 @@ class StatisticalValidator:
                         'harder': (best_harder_config, best_harder_imp)
                     }
             
-            f.write("1. **Best Performing Configurations:**\n")
+            content.append("1. **Best Performing Configurations:**\n")
             for dataset in TASKS:
                 # Skip datasets with no best configs
                 if dataset not in best_configs:
                     task_name = "Matrix Inverse" if dataset == 'inverse' else "Matrix Completion"
-                    f.write(f"   - **{task_name}:** *No data available*\n")
+                    content.append(f"   - **{task_name}:** *No data available*\n")
                     continue
                     
                 task_name = "Matrix Inverse" if dataset == 'inverse' else "Matrix Completion"
-                f.write(f"   - **{task_name}:**\n")
+                content.append(f"   - **{task_name}:**\n")
                 
                 same_config, same_imp = best_configs[dataset]['same']
                 harder_config, harder_imp = best_configs[dataset]['harder']
                 
-                f.write(f"     - Same Difficulty: {same_config['name']} ({same_imp:+.2f}%)\n")
-                f.write(f"     - Harder Difficulty: {harder_config['name']} ({harder_imp:+.2f}%)\n")
-            f.write("\n")
+                content.append(f"     - Same Difficulty: {same_config['name']} ({same_imp:+.2f}%)\n")
+                content.append(f"     - Harder Difficulty: {harder_config['name']} ({harder_imp:+.2f}%)\n")
+            content.append("\n")
             
-            f.write("2. **Eps=1.0, Steps=5, DP=0.001 Configuration:**\n")
-            f.write("   As noted in preliminary results, this configuration deserves special attention:\n")
+            content.append("2. **Eps=1.0, Steps=5, DP=0.001 Configuration:**\n")
+            content.append("   As noted in preliminary results, this configuration deserves special attention:\n")
             for dataset in TASKS:
                 # Skip datasets with no statistical results
                 if dataset not in self.statistical_results or 'baseline' not in self.statistical_results[dataset]:
@@ -1116,43 +1118,48 @@ class StatisticalValidator:
                     
                     # Check if both difficulty stats exist
                     if 'same_difficulty' not in config_stats or 'harder_difficulty' not in config_stats:
-                        f.write(f"   - **{task_name}:** *Incomplete data*\n")
+                        content.append(f"   - **{task_name}:** *Incomplete data*\n")
                         continue
                         
                     same_stats = config_stats['same_difficulty']
                     harder_stats = config_stats['harder_difficulty']
                     
-                    f.write(f"   - **{task_name}:**\n")
-                    f.write(f"     - Same Difficulty: {same_stats['improvement_percent']:+.2f}% ")
-                    f.write(f"(p={same_stats['p_value']:.6f}, {'significant' if same_stats['significant'] else 'not significant'})\n")
-                    f.write(f"     - Harder Difficulty: {harder_stats['improvement_percent']:+.2f}% ")
-                    f.write(f"(p={harder_stats['p_value']:.6f}, {'significant' if harder_stats['significant'] else 'not significant'})\n")
-            f.write("\n")
+                    content.append(f"   - **{task_name}:**\n")
+                    content.append(f"     - Same Difficulty: {same_stats['improvement_percent']:+.2f}% ")
+                    content.append(f"(p={same_stats['p_value']:.6f}, {'significant' if same_stats['significant'] else 'not significant'})\n")
+                    content.append(f"     - Harder Difficulty: {harder_stats['improvement_percent']:+.2f}% ")
+                    content.append(f"(p={harder_stats['p_value']:.6f}, {'significant' if harder_stats['significant'] else 'not significant'})\n")
+            content.append("\n")
             
-            f.write("3. **Statistical Robustness:**\n")
-            f.write("   Configurations showing consistent improvements across all 5 random seeds demonstrate ")
-            f.write("robust performance rather than sensitivity to initialization.\n\n")
+            content.append("3. **Statistical Robustness:**\n")
+            content.append("   Configurations showing consistent improvements across all 5 random seeds demonstrate ")
+            content.append("robust performance rather than sensitivity to initialization.\n\n")
             
-            f.write("4. **Effect Sizes:**\n")
-            f.write("   Cohen's d values provide a measure of practical significance beyond statistical significance. ")
-            f.write("Generally:\n")
-            f.write("   - |d| < 0.2: Small effect\n")
-            f.write("   - |d| ≈ 0.5: Medium effect\n")
-            f.write("   - |d| > 0.8: Large effect\n\n")
+            content.append("4. **Effect Sizes:**\n")
+            content.append("   Cohen's d values provide a measure of practical significance beyond statistical significance. ")
+            content.append("Generally:\n")
+            content.append("   - |d| < 0.2: Small effect\n")
+            content.append("   - |d| ≈ 0.5: Medium effect\n")
+            content.append("   - |d| > 0.8: Large effect\n\n")
             
-            f.write("### Recommendations\n\n")
-            f.write("Based on the statistical analysis:\n\n")
-            f.write("1. Configurations showing both statistical significance (p < 0.05) and meaningful effect sizes ")
-            f.write("(|Cohen's d| > 0.5) should be prioritized for further investigation.\n\n")
-            f.write("2. The variability across random seeds (indicated by standard deviations) should be considered ")
-            f.write("when interpreting results - lower variance indicates more stable performance.\n\n")
-            f.write("3. Configurations that perform well on harder difficulty (OOD) tests demonstrate better ")
-            f.write("generalization capabilities.\n\n")
-            
-            f.write("---\n\n")
-            f.write(f"*Report generated on {time.strftime('%Y-%m-%d at %H:%M:%S')}*\n")
+            content.append("### Recommendations\n\n")
+            content.append("Based on the statistical analysis:\n\n")
+            content.append("1. Configurations showing both statistical significance (p < 0.05) and meaningful effect sizes ")
+            content.append("(|Cohen's d| > 0.5) should be prioritized for further investigation.\n\n")
+            content.append("2. The variability across random seeds (indicated by standard deviations) should be considered ")
+            content.append("when interpreting results - lower variance indicates more stable performance.\n\n")
+            content.append("3. Configurations that perform well on harder difficulty (OOD) tests demonstrate better ")
+            content.append("generalization capabilities.\n\n")
         
-        print(f"Markdown report saved to: {report_path}\n")
+        content.append("---\n\n")
+        content.append(f"*Report generated on {time.strftime('%Y-%m-%d at %H:%M:%S')}*\n")
+        
+        # Write all content at once using robust method
+        full_content = ''.join(content)
+        if self._robust_write_file(report_path, full_content):
+            print(f"Markdown report saved to: {report_path}\n")
+        else:
+            print(f"ERROR: Failed to save markdown report to: {report_path}\n")
         sys.stdout.flush()
         
         return report_path

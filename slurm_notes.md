@@ -14,14 +14,18 @@ scp analyze_distance_penalty_effects.py mkrasnow@login.rc.fas.harvard.edu:~/anal
 
 scp statistical_validation_anm.py mkrasnow@login.rc.fas.harvard.edu:~/statistical_validation_anm.py
 
+scp sweep_energy_hnm_hyperparameters.py mkrasnow@login.rc.fas.harvard.edu:~/sweep_energy_hnm_hyperparameters.py
+
+
 scp run_statistical_validation_anm.sh mkrasnow@login.rc.fas.harvard.edu:~/run_statistical_validation_anm.sh
 
 scp run_sweep_energy_hnm.sh mkrasnow@login.rc.fas.harvard.edu:~/run_sweep_energy_hnm.sh
 
-scp sweep_energy_hnm_hyperparameters.py mkrasnow@login.rc.fas.harvard.edu:~/sweep_energy_hnm_hyperparameters.py
+scp run_analyze_distance_penalty.sh mkrasnow@login.rc.fas.harvard.edu:~/run_analyze_distance_penalty.sh
 
 sbatch run_statistical_validation_anm.sh
 sbatch run_sweep_energy_hnm.sh
+sbatch run_analyze_distance_penalty.sh
 
 Submit with `sbatch run_specifics.sh`
 Check status: `squeue -u mkrasnow`

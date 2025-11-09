@@ -1,7 +1,7 @@
 ---
 description: Analyze request, create alternating implementation/review todos, and validate all changes with critical self-review
 argument-hint: <user request>
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash(git *), TodoManager
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash, TodoManager, Cat, Echo, Touch
 ---
 
 You are implementing a rigorous build-and-review workflow. The user's request is: "$ARGUMENTS"

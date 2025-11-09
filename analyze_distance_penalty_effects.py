@@ -17,6 +17,15 @@ Author: Generated for IRED Distance Penalty Analysis
 
 import os
 import subprocess
+
+subprocess.run(['rm', '-rf', 'energy-based-model-2'], check=False)
+subprocess.run(['git', 'clone', 'https://github.com/mdkrasnow/energy-based-model-2.git'], check=True)
+os.chdir('energy-based-model-2')
+
+# Add the cloned repository to Python path
+import sys
+sys.path.insert(0, os.getcwd())
+
 import argparse
 import json
 import numpy as np
@@ -437,6 +446,7 @@ class DistancePenaltyAnalyzer:
             '--anm-clean-ratio', '0.1',
             '--anm-adversarial-ratio', '0.8',
             '--anm-gaussian-ratio', '0.1',
+            '--anm-hard-negative-ratio', '0.0',
         ]
         
         # Run training with output capture
@@ -482,6 +492,9 @@ class DistancePenaltyAnalyzer:
                 return True
             else:
                 print(f"  ✗ Training failed with exit code {result}")
+                print("  Full output from failed process:")
+                for line in output_lines:
+                    print(f"    | {line.rstrip()}")
                 return False
                 
         except Exception as e:

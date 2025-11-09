@@ -312,6 +312,94 @@ if __name__ == "__main__":
     if FLAGS.use_anm:
         from curriculum_config import get_curriculum_by_name, CurriculumStage, CurriculumConfig
         
+        def normalize_curriculum_ratios(stage, overrides):
+            """
+            Normalize curriculum ratios to ensure they sum to 1.0 when overrides are applied.
+            
+            Args:
+                stage: Original CurriculumStage
+                overrides: Dict of ratio overrides from command line flags
+                
+            Returns:
+                Dict of normalized ratios that sum to 1.0
+            """
+            # Get original ratios
+            original_ratios = {
+                'clean_ratio': stage.clean_ratio,
+                'adversarial_ratio': stage.adversarial_ratio,
+                'gaussian_ratio': stage.gaussian_ratio,
+                'hard_negative_ratio': stage.hard_negative_ratio
+            }
+            
+            # Apply overrides with validation
+            final_ratios = {}
+            overridden_keys = set()
+            override_sum = 0.0
+            
+            for key, original_value in original_ratios.items():
+                if key in overrides and overrides[key] is not None:
+                    override_value = overrides[key]
+                    # Validate override ratio is non-negative
+                    if override_value < 0:
+                        raise ValueError(f"Ratio override for {key} must be non-negative, got {override_value}")
+                    final_ratios[key] = override_value
+                    overridden_keys.add(key)
+                    override_sum += override_value
+                else:
+                    final_ratios[key] = original_value
+            
+            # Check if overrides alone exceed 1.0
+            if override_sum > 1.0:
+                print(f"Warning: Override ratios sum to {override_sum:.3f} > 1.0. "
+                      f"All non-overridden ratios will be set to 0.0")
+                # Set all non-overridden ratios to 0
+                for key in original_ratios.keys():
+                    if key not in overridden_keys:
+                        final_ratios[key] = 0.0
+                # Normalize overrides to sum to 1.0
+                if override_sum > 0:
+                    for key in overridden_keys:
+                        final_ratios[key] = final_ratios[key] / override_sum
+            else:
+                # Calculate remaining capacity for non-overridden ratios
+                remaining_capacity = 1.0 - override_sum
+                
+                # Get sum of non-overridden original ratios
+                non_overridden_sum = sum(original_ratios[key] for key in original_ratios.keys() 
+                                       if key not in overridden_keys)
+                
+                # Scale non-overridden ratios to fit remaining capacity
+                if non_overridden_sum > 0 and remaining_capacity >= 0:
+                    scale_factor = remaining_capacity / non_overridden_sum
+                    for key in original_ratios.keys():
+                        if key not in overridden_keys:
+                            final_ratios[key] = original_ratios[key] * scale_factor
+                    
+                    # Log ratio adjustments if significant scaling occurred
+                    if abs(scale_factor - 1.0) > 0.1:
+                        non_overridden_names = [key.replace('_ratio', '') 
+                                              for key in original_ratios.keys() 
+                                              if key not in overridden_keys]
+                        print(f"Note: Scaled {', '.join(non_overridden_names)} ratios by "
+                              f"{scale_factor:.3f} to accommodate overrides")
+                elif remaining_capacity < 0:
+                    # This shouldn't happen due to the check above, but handle it
+                    for key in original_ratios.keys():
+                        if key not in overridden_keys:
+                            final_ratios[key] = 0.0
+            
+            # Final validation and precision correction
+            total_sum = sum(final_ratios.values())
+            if abs(total_sum - 1.0) > 1e-10:  # Handle floating point precision
+                # Normalize to exactly 1.0 if close enough
+                if abs(total_sum - 1.0) < 0.01:  # Within 1%
+                    for key in final_ratios:
+                        final_ratios[key] = final_ratios[key] / total_sum
+                else:
+                    raise ValueError(f"Ratio normalization failed: final sum is {total_sum}, expected ~1.0")
+            
+            return final_ratios
+        
         # Use the specified curriculum (default is 'aggressive')
         curriculum_config = get_curriculum_by_name(FLAGS.curriculum)
         curriculum_config.total_steps = FLAGS.train_steps
@@ -326,14 +414,26 @@ if __name__ == "__main__":
                 FLAGS.anm_hard_negative_ratio is not None]):
             # Create a new curriculum config with overridden values
             modified_stages = {}
+            
+            # Prepare override dictionary
+            ratio_overrides = {
+                'clean_ratio': FLAGS.anm_clean_ratio,
+                'adversarial_ratio': FLAGS.anm_adversarial_ratio,
+                'gaussian_ratio': FLAGS.anm_gaussian_ratio,
+                'hard_negative_ratio': FLAGS.anm_hard_negative_ratio
+            }
+            
             for (start_pct, end_pct), stage in curriculum_config.stages.items():
-                # Create a new stage with potentially overridden values
+                # Get normalized ratios that sum to 1.0
+                normalized_ratios = normalize_curriculum_ratios(stage, ratio_overrides)
+                
+                # Create a new stage with normalized ratios
                 modified_stages[(start_pct, end_pct)] = CurriculumStage(
                     name=stage.name,
-                    clean_ratio=FLAGS.anm_clean_ratio if FLAGS.anm_clean_ratio is not None else stage.clean_ratio,
-                    adversarial_ratio=FLAGS.anm_adversarial_ratio if FLAGS.anm_adversarial_ratio is not None else stage.adversarial_ratio,
-                    gaussian_ratio=FLAGS.anm_gaussian_ratio if FLAGS.anm_gaussian_ratio is not None else stage.gaussian_ratio,
-                    hard_negative_ratio=FLAGS.anm_hard_negative_ratio if FLAGS.anm_hard_negative_ratio is not None else stage.hard_negative_ratio,
+                    clean_ratio=normalized_ratios['clean_ratio'],
+                    adversarial_ratio=normalized_ratios['adversarial_ratio'],
+                    gaussian_ratio=normalized_ratios['gaussian_ratio'],
+                    hard_negative_ratio=normalized_ratios['hard_negative_ratio'],
                     epsilon_multiplier=stage.epsilon_multiplier,  # Keep from curriculum
                     temperature=FLAGS.anm_temperature if FLAGS.anm_temperature is not None else stage.temperature,
                     focus=stage.focus + " (with overrides)"
