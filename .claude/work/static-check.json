@@ -1,13 +1,36 @@
 {
-  "timestamp": "2025-11-05T12:00:00Z",
+  "timestamp": "2025-11-10T12:30:00Z",
   "lint": {
+    "tool": "flake8",
     "errors": [],
-    "warnings": [],
-    "clean": true
+    "warnings": [
+      "F401: Multiple unused import issues across files",
+      "W293: Extensive blank lines contain whitespace (500+ instances)",
+      "E402: Multiple module level imports not at top of file",
+      "E501: Several lines too long (>120 characters)",
+      "F541: Multiple f-strings missing placeholders",
+      "F841: Several unused local variables",
+      "E251: Missing spaces around keyword/parameter equals",
+      "W291: Trailing whitespace issues",
+      "E128: Continuation line indentation issues"
+    ],
+    "clean": false
+  },
+  "typescript": {
+    "errors": [],
+    "clean": true,
+    "note": "No TypeScript in this Python project"
   },
   "python_syntax": {
     "errors": [],
     "clean": true
   },
-  "baseline_dirty": false
+  "baseline_dirty": true,
+  "summary": "Extensive formatting and style issues across multiple Python files. No syntax errors, but code quality needs improvement through automated formatting and cleanup.",
+  "fix_priority": [
+    "Remove unused imports (F401)",
+    "Clean whitespace formatting (W293, W291)", 
+    "Fix import organization (E402)",
+    "Address line length issues (E501)"
+  ]
 }

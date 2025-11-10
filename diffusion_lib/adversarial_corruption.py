@@ -98,8 +98,15 @@ def _standard_ired_corruption(
 
 
 def _adversarial_corruption(
-    ops: DiffusionOps, inp: torch.Tensor, x_start: torch.Tensor, t: torch.Tensor, mask: Optional[torch.Tensor],
-    data_cond: Optional[torch.Tensor], base_noise_scale: float, epsilon: float
+    ops: DiffusionOps,
+    inp: torch.Tensor,
+    x_start: torch.Tensor,
+    t: torch.Tensor,
+    mask: Optional[torch.Tensor],
+    data_cond: Optional[torch.Tensor],
+    base_noise_scale: float,
+    epsilon: float,
+    project: bool = True,
 ) -> torch.Tensor:
     noise = torch.randn_like(x_start)
     xmin_noise = ops.q_sample(x_start=x_start, t=t, noise=base_noise_scale * noise)
@@ -109,35 +116,31 @@ def _adversarial_corruption(
 
     xmin_noise.requires_grad_(True)
     opt_step_size = _extract(ops.opt_step_size, t, xmin_noise.shape)
-    xmin_noise_orig = xmin_noise.clone().detach()
 
     for i in range(ops.anm_adversarial_steps):
         energy, grad = ops.model(inp, xmin_noise, t, return_both=True)
 
-        distance_penalty = F.mse_loss(xmin_noise, xmin_noise_orig)
-        adaptive_penalty_weight = epsilon * torch.clamp(1.0 / (distance_penalty + 1e-6), 0.1, 2.0)
-
-        penalty_grad = torch.autograd.grad(distance_penalty, xmin_noise, create_graph=False, retain_graph=True)[0]
-        modified_grad = grad - adaptive_penalty_weight * penalty_grad
-
         step_scale = 1.0 * (0.7 ** i)
-        xmin_noise = xmin_noise - opt_step_size * modified_grad * step_scale
+        xmin_noise = xmin_noise - opt_step_size * grad * step_scale
 
         if mask is not None:
             xmin_noise = xmin_noise * (1 - mask) + mask * data_cond
 
-        if ops.continuous:
-            sf = 2.0
-        elif ops.shortest_path:
-            sf = 0.1
-        else:
-            sf = 1.0
+        if project:
+            if ops.continuous:
+                sf = 2.0
+            elif ops.shortest_path:
+                sf = 0.1
+            else:
+                sf = 1.0
 
-        max_val = _extract(ops.sqrt_alphas_cumprod, t, xmin_noise.shape) * sf
-        xmin_noise = torch.clamp(xmin_noise, -max_val, max_val)
+            max_val = _extract(ops.sqrt_alphas_cumprod, t, xmin_noise.shape) * sf
+            xmin_noise = torch.clamp(xmin_noise, -max_val, max_val)
+
         xmin_noise.requires_grad_(True)
 
     return xmin_noise.detach()
+
 
 
 # def _adversarial_corruption_lowrank(

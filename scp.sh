@@ -18,11 +18,11 @@ ssh -MNf \
 echo "Running SCP transfers using shared connection..."
 
 scp -o ControlPath="${CTRL_PATH}" analyze_distance_penalty_effects.py     "${REMOTE}:~/analyze_distance_penalty_effects.py"
-scp -o ControlPath="${CTRL_PATH}" statistical_validation_anm.py           "${REMOTE}:~/statistical_validation_anm.py"
-scp -o ControlPath="${CTRL_PATH}" run_statistical_validation_anm.sh       "${REMOTE}:~/run_statistical_validation_anm.sh"
 scp -o ControlPath="${CTRL_PATH}" run_sweep_energy_hnm.sh                 "${REMOTE}:~/run_sweep_energy_hnm.sh"
 scp -o ControlPath="${CTRL_PATH}" sweep_energy_hnm_hyperparameters.py     "${REMOTE}:~/sweep_energy_hnm_hyperparameters.py"
 scp -o ControlPath="${CTRL_PATH}" run_analyze_distance_penalty.sh         "${REMOTE}:~/run_analyze_distance_penalty.sh"
+scp -o ControlPath="${CTRL_PATH}" phase1_statistical_viability.py         "${REMOTE}:~/phase1_statistical_viability.py"
+scp -o ControlPath="${CTRL_PATH}" run_phase1_viability.sh                 "${REMOTE}:~/run_phase1_viability.sh"
 
 echo "Closing master SSH connection..."
 ssh -O exit -o ControlPath="${CTRL_PATH}" "${REMOTE}"

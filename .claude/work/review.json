@@ -1,70 +1,68 @@
 {
-  "timestamp": "2025-11-05T12:00:00Z",
+  "timestamp": "2025-11-10T12:30:00Z",
   "plan_provided": true,
-  "strategy": "medium",
+  "strategy": "minimal",
   "diff_stats": {
-    "files_changed": 4,
-    "insertions": 122,
-    "deletions": 40
+    "files_changed": 3,
+    "insertions": 157,
+    "deletions": 80
   },
   "findings": [
     {
-      "severity": "high",
+      "severity": "critical",
       "category": "plan-compliance",
-      "file": "diffusion_lib/energy_hard_negatives.py",
-      "line": 72,
-      "issue": "num_candidates is clamped to ops.sqrt_alphas_cumprod.shape[0] but plan expects fixed 10 landscapes",
-      "impact": "Could limit hard negative diversity if timesteps < 10",
-      "fix": "Remove or document the clamping logic, ensure 10 landscapes are always available",
+      "file": "N/A",
+      "line": 0,
+      "issue": "Complete absence of Phase 1 implementation - no actual code changes made",
+      "impact": "Zero progress on main deliverables specified in implementation plans",
+      "fix": "Implement the 4 new files as specified in implementation plan: statistical_utils.py, random_noise_baseline.py, phase1_configs.py, phase1_statistical_viability.py",
       "plan_related": true
     },
     {
-      "severity": "medium", 
-      "category": "correctness",
-      "file": "diffusion_lib/energy_hard_negatives.py",
-      "line": 81,
-      "issue": "Using torch.full_like(t, landscape_idx) creates same landscape index for all batch items",
-      "impact": "All batch items sample from same landscape per candidate, reducing diversity",
-      "fix": "Use torch.full((t.shape[0],), landscape_idx, device=t.device, dtype=t.dtype)",
+      "severity": "critical",
+      "category": "plan-compliance",
+      "file": "smoke_test_with_diagnostics.py",
+      "line": 104,
+      "issue": "Critical path bug NOT fixed - still has hardcoded 'model-20.pt' paths",
+      "impact": "Plan identified this as causing 98% failure rates, blocking all Phase 1 statistical testing",
+      "fix": "Replace hardcoded 'model-20.pt' with dynamic calculation: f'model-{TRAIN_ITERATIONS // 1000}.pt'",
       "plan_related": true
     },
     {
       "severity": "medium",
-      "category": "correctness", 
-      "file": "curriculum_config.py",
-      "line": 32,
-      "issue": "Ratio validation only checks sum but doesn't validate individual ratios >= 0",
-      "impact": "Could allow negative ratios which don't make sense",
-      "fix": "Add validation that all ratios are non-negative",
+      "category": "maintainability",
+      "file": "Multiple files",
+      "line": 0,
+      "issue": "Extensive lint/formatting violations across codebase (500+ issues)",
+      "impact": "Reduces code readability and maintainability",
+      "fix": "Run automated formatter (black/autopep8) and fix imports organization",
       "plan_related": false
     },
     {
       "severity": "low",
       "category": "maintainability",
-      "file": "diffusion_lib/energy_hard_negatives.py", 
-      "line": 121,
-      "issue": "Broad exception handling without logging could hide important errors",
-      "impact": "Debugging issues with energy computation becomes difficult",
-      "fix": "Add logging for caught exceptions or use more specific exception types",
-      "plan_related": false
-    },
-    {
-      "severity": "low",
-      "category": "performance",
-      "file": "diffusion_lib/energy_hard_negatives.py",
-      "line": 76,
-      "issue": "Appending to list in loop then iterating over candidates is inefficient for large batches",
-      "impact": "Memory usage and selection time could be optimized",
-      "fix": "Consider batch processing or tensor operations for candidate evaluation",
+      "file": "Multiple files",
+      "line": 0,
+      "issue": "Unused imports and variables (F401, F841 violations)",
+      "impact": "Dead code increases maintenance burden",
+      "fix": "Remove unused imports and variables identified by flake8",
       "plan_related": false
     }
   ],
   "summary": {
-    "critical": 0,
-    "high": 1,
-    "medium": 2,
-    "low": 2,
+    "critical": 2,
+    "high": 0, 
+    "medium": 1,
+    "low": 1,
     "plan_compliance_issues": 2,
     "requires_fixes": true
+  },
+  "plan_assessment": {
+    "implementation_completeness": "0%",
+    "critical_bug_fixed": false,
+    "new_files_created": "0 of 4", 
+    "core_functionality_status": "not started",
+    "statistical_infrastructure": "missing entirely",
+    "note": "Only review tracking files were modified - no actual implementation occurred"
   }
 }
