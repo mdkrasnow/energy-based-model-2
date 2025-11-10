@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 from .energy_hard_negatives import energy_based_hard_negative_mining
 
-CorruptionType = Literal["clean", "adversarial", "gaussian", "standard", "hard_negative"]
+CorruptionType = Literal["clean", "adversarial", "gaussian", "standard", "hard_negative", "random_noise"]
 
 
 class DiffusionOps(Protocol):
@@ -42,6 +42,10 @@ def _sample_corruption_type(stage) -> CorruptionType:
         return "adversarial"
     if r < stage.clean_ratio + stage.adversarial_ratio + stage.hard_negative_ratio:
         return "hard_negative"
+    # Check for random_noise_ratio if it exists (Phase 1 specific)
+    if hasattr(stage, 'random_noise_ratio'):
+        if r < stage.clean_ratio + stage.adversarial_ratio + stage.hard_negative_ratio + stage.random_noise_ratio:
+            return "random_noise"
     return "gaussian"
 
 
@@ -55,6 +59,27 @@ def _gaussian_noise_corruption(
 ) -> torch.Tensor:
     noise = torch.randn_like(x_start)
     return ops.q_sample(x_start=x_start, t=t, noise=scale * noise)
+
+
+def _random_noise_corruption(
+    ops: DiffusionOps, x_start: torch.Tensor, t: torch.Tensor, noise_scale: float = 1.0
+) -> torch.Tensor:
+    """
+    Random noise corruption for Phase 1 baseline control.
+    
+    Generates pure random noise negatives to test whether ANM provides
+    any benefit over completely random perturbations.
+    
+    Args:
+        ops: DiffusionOps object (not used, for interface compatibility)
+        x_start: Ground truth samples 
+        t: Timestep tensor (not used, for interface compatibility)
+        noise_scale: Scale factor for random noise (σ ∈ {0.1, 0.5, 1.0})
+        
+    Returns:
+        torch.Tensor: Random noise samples
+    """
+    return torch.randn_like(x_start) * noise_scale
 
 
 def _standard_ired_corruption(

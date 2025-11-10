@@ -56,7 +56,7 @@ sns.set_palette("husl")
 # Fixed hyperparameters for controlled experiment
 BATCH_SIZE = 2048
 LEARNING_RATE = 1e-4
-TRAIN_ITERATIONS = 50000  # Full training for definitive results
+TRAIN_ITERATIONS = 1000  # Full training for definitive results
 DIFFUSION_STEPS = 10
 RANK = 20  # For 20x20 matrices
 
@@ -71,7 +71,7 @@ FIXED_ADV_STEPS = 5
 TASKS = ['inverse', 'lowrank']  # Matrix Inverse and Matrix Completion
 
 # Diagnostic collection interval (every 5,000 steps)
-DIAGNOSTIC_INTERVAL = 5000
+DIAGNOSTIC_INTERVAL = 500
 
 
 class DistancePenaltyAnalyzer:
@@ -539,7 +539,7 @@ class DistancePenaltyAnalyzer:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout
+                timeout=1200  # 20 minute timeout for full training evaluation
             )
             
             # Run evaluation on harder difficulty (OOD)
@@ -548,7 +548,7 @@ class DistancePenaltyAnalyzer:
                 cmd_ood,
                 capture_output=True,
                 text=True,
-                timeout=300
+                timeout=1200  # 20 minute timeout for full training evaluation
             )
             
             # Parse MSE from outputs
@@ -762,8 +762,8 @@ class DistancePenaltyAnalyzer:
                 energy_by_type['anm_adversarial'].extend(energy_anm.cpu().numpy())
             
             # Calculate distances, errors, and gradient magnitudes for ANM
-            anm_distances = torch.norm(y_anm - y_clean, dim=-1)
-            anm_mse = F.mse_loss(y_anm, y_clean, reduction='none').mean(dim=-1)
+            anm_distances = torch.norm(y_anm - y_clean, dim=-1).detach()
+            anm_mse = F.mse_loss(y_anm, y_clean, reduction='none').mean(dim=-1).detach()
             
             # Calculate gradient magnitudes at ANM negatives
             y_anm_grad = y_anm.clone().requires_grad_(True)
@@ -774,7 +774,7 @@ class DistancePenaltyAnalyzer:
             negative_distances.extend(anm_distances.cpu().numpy())
             mse_errors.extend(anm_mse.cpu().numpy())
             energy_values.extend(energy_anm.cpu().numpy())
-            gradient_magnitudes.extend(grad_magnitudes.cpu().numpy())
+            gradient_magnitudes.extend(grad_magnitudes.detach().cpu().numpy())
             
             # 4. Gaussian noise corruption
             y_gaussian = y_clean + 0.1 * torch.randn_like(y_clean)

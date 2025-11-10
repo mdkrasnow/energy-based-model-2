@@ -18,9 +18,18 @@ import json
 import time
 import re
 import errno
+import logging
 from pathlib import Path
 from collections import defaultdict
 from itertools import product
+
+# Basic structured logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 import torch
 import torch.nn.functional as F
@@ -40,7 +49,7 @@ from diffusion_lib.energy_hard_negatives import energy_based_hard_negative_minin
 # Training hyperparameters
 BATCH_SIZE = 2048
 LEARNING_RATE = 1e-4
-TRAIN_ITERATIONS = 25000  # Reduced for rapid iteration
+TRAIN_ITERATIONS = 1000  # Reduced for quick debugging
 DIFFUSION_STEPS = 10
 RANK = 20
 
@@ -96,11 +105,11 @@ class EnergyHNMSweepRunner:
                             path = Path(str(file_path))
                         
                         wait_time = 0.1 * (2 ** attempt)
-                        print(f"Warning: Stale file handle for {file_path}, retrying in {wait_time:.1f}s...")
+                        logger.warning(f"Stale file handle for {file_path}, retrying in {wait_time:.1f}s...")
                         time.sleep(wait_time)
                         continue
                     else:
-                        print(f"Error: Failed to check file existence after {max_retries} retries: {file_path}")
+                        logger.error(f"Failed to check file existence after {max_retries} retries: {file_path}")
                         return False
                 else:
                     # Re-raise other OSErrors (permissions, disk errors, etc.)
@@ -130,7 +139,7 @@ class EnergyHNMSweepRunner:
                             path = Path(str(dir_path))
                         
                         wait_time = 0.1 * (2 ** attempt)
-                        print(f"Warning: Stale file handle for directory {dir_path}, retrying in {wait_time:.1f}s...")
+                        logger.warning(f"Stale file handle for directory {dir_path}, retrying in {wait_time:.1f}s...")
                         time.sleep(wait_time)
                         continue
                     else:
@@ -262,7 +271,11 @@ class EnergyHNMSweepRunner:
         """Train baseline IRED model without HNM"""
         result_dir = self.get_result_dir(dataset, 'baseline')
         
-        if not force_retrain and self._robust_file_exists(f'{result_dir}/model-20.pt'):
+        # Calculate correct milestone based on training steps and save interval
+        save_interval = 1000  # From train.py save_and_sample_every default
+        final_milestone = TRAIN_ITERATIONS // save_interval
+        
+        if not force_retrain and self._robust_file_exists(f'{result_dir}/model-{final_milestone}.pt'):
             print(f"\nBaseline for {dataset} already exists. Skipping.")
             return True
         
@@ -321,7 +334,11 @@ class EnergyHNMSweepRunner:
         
         config_name = f"c{num_candidates}_r{refinement_steps}_l{lambda_weight}"
         
-        if not force_retrain and self._robust_file_exists(f'{result_dir}/model-20.pt'):
+        # Calculate correct milestone based on training steps and save interval
+        save_interval = 1000  # From train.py save_and_sample_every default
+        final_milestone = TRAIN_ITERATIONS // save_interval
+        
+        if not force_retrain and self._robust_file_exists(f'{result_dir}/model-{final_milestone}.pt'):
             print(f"\nModel for {dataset} ({config_name}) already exists. Skipping.")
             return True
         
@@ -376,7 +393,26 @@ class EnergyHNMSweepRunner:
             elapsed = time.time() - start_time
             
             if result == 0:
-                print(f"\nTraining completed in {elapsed/60:.2f} minutes\n")
+                print(f"\nTraining completed in {elapsed/60:.2f} minutes")
+                
+                # Wait for NFS filesystem to propagate
+                save_interval = 1000  # From train.py save_and_sample_every default
+                final_milestone = TRAIN_ITERATIONS // save_interval
+                expected_model_path = os.path.join(result_dir, f'model-{final_milestone}.pt')
+                
+                for attempt in range(6):
+                    if os.path.exists(expected_model_path) and os.path.getsize(expected_model_path) > 0:
+                        print(f"✓ Model verified at {expected_model_path} (attempt {attempt+1})")
+                        break
+                    elif attempt < 5:
+                        print(f"⚠️  Model not yet visible, waiting for NFS sync (attempt {attempt+1}/6)...")
+                        time.sleep(5)  # Wait 5 seconds
+                    else:
+                        print(f"✗ ERROR: Model not found after 30s at {expected_model_path}")
+                        print(f"  Training may have failed silently or NFS latency exceeded 30s")
+                        return False  # Indicate failure explicitly
+                        
+                print()
                 return True
             else:
                 print(f"\nERROR: Training failed with exit code {result}\n")
@@ -392,9 +428,33 @@ class EnergyHNMSweepRunner:
         result_dir = self.get_result_dir(dataset, model_type, num_candidates, 
                                         refinement_steps, lambda_weight)
         
-        if not self._robust_file_exists(f'{result_dir}/model-20.pt'):
-            print(f"\nERROR: No trained model found at {result_dir}/model-20.pt\n")
-            return None
+        # Calculate correct milestone based on training steps and save interval
+        save_interval = 1000  # From train.py save_and_sample_every default
+        final_milestone = TRAIN_ITERATIONS // save_interval
+        model_file = f'{result_dir}/model-{final_milestone}.pt'
+        
+        print(f"DEBUG: Looking for model at: {model_file}")
+        print(f"DEBUG: TRAIN_ITERATIONS={TRAIN_ITERATIONS}, save_interval={save_interval}, milestone={final_milestone}")
+        
+        if not self._robust_file_exists(model_file):
+            print(f"\nERROR: No trained model found at {model_file}")
+            # List what files do exist for debugging
+            try:
+                import os
+                if os.path.exists(result_dir):
+                    files = os.listdir(result_dir)
+                    print(f"DEBUG: Files found in {result_dir}: {files}")
+                else:
+                    print(f"DEBUG: Directory does not exist: {result_dir}")
+            except Exception as e:
+                print(f"DEBUG: Error listing directory: {e}")
+            print()
+            return {
+                'success': False,
+                'mse_harder': None,
+                'error': 'model_file_not_found',
+                'model_path': model_file
+            }
         
         difficulty = "Harder (OOD)" if ood else "Same"
         config_str = f"c{num_candidates}_r{refinement_steps}_l{lambda_weight}" if model_type == 'energy_hnm' else 'baseline'
@@ -410,7 +470,7 @@ class EnergyHNMSweepRunner:
             '--diffusion_steps', str(DIFFUSION_STEPS),
             '--rank', str(RANK),
             '--train-steps', str(TRAIN_ITERATIONS),
-            '--load-milestone', '1',
+            '--load-milestone', str(final_milestone),
             '--evaluate',
         ]
         
@@ -444,46 +504,88 @@ class EnergyHNMSweepRunner:
             if result == 0:
                 output_text = ''.join(output_lines)
                 mse = self._parse_mse_from_output(output_text)
-                print(f"  MSE: {mse:.6f}" if mse else "  MSE: N/A")
-                return mse
+                if mse is not None:
+                    print(f"  MSE: {mse:.6f}")
+                    # Success
+                    return {
+                        'success': True,
+                        'mse_harder': mse,
+                        'error': None
+                    }
+                else:
+                    print(f"  MSE: N/A")
+                    # When parsing fails:
+                    return {
+                        'success': False,
+                        'mse_harder': None,
+                        'error': 'mse_parsing_failed',
+                        'output_sample': output_text[-200:] if len(output_text) > 200 else output_text
+                    }
             else:
                 print(f"  Evaluation failed with exit code {result}")
-                return None
+                # When subprocess fails:
+                return {
+                    'success': False,
+                    'mse_harder': None,
+                    'error': 'evaluation_subprocess_failed',
+                    'details': f"Exit code: {result}"
+                }
                 
         except Exception as e:
             print(f"  Evaluation failed: {e}")
-            return None
+            return {
+                'success': False,
+                'mse_harder': None,
+                'error': 'evaluation_subprocess_failed',
+                'details': str(e)
+            }
     
     def _parse_mse_from_output(self, output):
         """Parse MSE from evaluation output"""
         lines = output.split('\n')
         mse_value = None
         
+        print(f"DEBUG: Parsing MSE from {len(lines)} output lines")
+        
         for line in lines:
             if line.startswith('mse') and '  ' in line:
+                print(f"DEBUG: Found MSE line: {line.strip()}")
                 parts = line.split()
                 if len(parts) >= 2 and parts[0] == 'mse':
                     try:
                         mse_value = float(parts[1])
+                        print(f"DEBUG: Successfully parsed MSE: {mse_value}")
                     except (ValueError, IndexError):
-                        pass
+                        print(f"DEBUG: Failed to parse MSE from parts: {parts}")
         
         if mse_value is None:
+            print("DEBUG: No MSE found with primary pattern, trying secondary pattern")
             for line in lines:
                 if 'mse_error' in line.lower():
+                    print(f"DEBUG: Found mse_error line: {line.strip()}")
                     parts = line.split()
                     for i, part in enumerate(parts):
                         if 'mse' in part.lower() and i + 1 < len(parts):
                             try:
                                 mse_value = float(parts[i + 1])
+                                print(f"DEBUG: Successfully parsed MSE from mse_error: {mse_value}")
                             except ValueError:
-                                pass
+                                print(f"DEBUG: Failed to parse MSE from mse_error parts: {parts}")
+        
+        if mse_value is None:
+            print("DEBUG: No MSE found in output. Sample lines:")
+            for i, line in enumerate(lines[-10:]):  # Show last 10 lines
+                if line.strip():
+                    print(f"DEBUG:   {i}: {line.strip()}")
         
         return mse_value
     
     def load_model_for_diagnostics(self, model_dir, dataset_name, device='cuda'):
         """Load trained model for diagnostic analysis"""
-        checkpoint_path = Path(model_dir) / 'model-20.pt'
+        # Calculate correct milestone based on training steps and save interval
+        save_interval = 1000  # From train.py save_and_sample_every default
+        final_milestone = TRAIN_ITERATIONS // save_interval
+        checkpoint_path = Path(model_dir) / f'model-{final_milestone}.pt'
         if not self._robust_file_exists(checkpoint_path):
             return None
         
@@ -760,9 +862,34 @@ class EnergyHNMSweepRunner:
             print(f"Evaluating baseline for {dataset.upper()}")
             print(f"{'='*80}")
             
+            # Evaluate baseline model
+            result = self.evaluate_model(dataset, 'baseline', ood=False)
+            mse_same_baseline = result.get('mse_harder') if isinstance(result, dict) else result
+            if not (isinstance(result, dict) and result.get('success', True)):
+                error_type = result.get('error', 'unknown') if isinstance(result, dict) else 'evaluation_failed'
+                print(f"⚠️  Evaluation error for baseline on {dataset} same: {error_type}")
+                baseline_dir = self.get_result_dir(dataset, 'baseline')
+                save_interval = 1000  
+                final_milestone = TRAIN_ITERATIONS // save_interval
+                model_path = f"{baseline_dir}/model-{final_milestone}.pt"
+                print(f"  Expected model at: {model_path}")
+                print(f"  File exists: {os.path.exists(model_path)}")
+            
+            result = self.evaluate_model(dataset, 'baseline', ood=True)
+            mse_harder_baseline = result.get('mse_harder') if isinstance(result, dict) else result
+            if not (isinstance(result, dict) and result.get('success', True)):
+                error_type = result.get('error', 'unknown') if isinstance(result, dict) else 'evaluation_failed'
+                print(f"⚠️  Evaluation error for baseline on {dataset} harder: {error_type}")
+                baseline_dir = self.get_result_dir(dataset, 'baseline') 
+                save_interval = 1000
+                final_milestone = TRAIN_ITERATIONS // save_interval
+                model_path = f"{baseline_dir}/model-{final_milestone}.pt"
+                print(f"  Expected model at: {model_path}")
+                print(f"  File exists: {os.path.exists(model_path)}")
+            
             baseline_results[dataset] = {
-                'mse_same': self.evaluate_model(dataset, 'baseline', ood=False),
-                'mse_harder': self.evaluate_model(dataset, 'baseline', ood=True),
+                'mse_same': mse_same_baseline,
+                'mse_harder': mse_harder_baseline,
             }
             
             # Run diagnostics on baseline
@@ -831,15 +958,35 @@ class EnergyHNMSweepRunner:
                     continue
                 
                 # Evaluate model
-                mse_same = self.evaluate_model(dataset, 'energy_hnm', ood=False,
+                result = self.evaluate_model(dataset, 'energy_hnm', ood=False,
                                               num_candidates=num_cand,
                                               refinement_steps=ref_steps,
                                               lambda_weight=lambda_w)
+                mse_same = result.get('mse_harder') if isinstance(result, dict) else result
+                if not (isinstance(result, dict) and result.get('success', True)):
+                    error_type = result.get('error', 'unknown') if isinstance(result, dict) else 'evaluation_failed'
+                    print(f"⚠️  Evaluation error for {config_name} on {dataset} same: {error_type}")
+                    model_dir = self.get_result_dir(dataset, 'energy_hnm', num_cand, ref_steps, lambda_w)
+                    save_interval = 1000
+                    final_milestone = TRAIN_ITERATIONS // save_interval
+                    model_path = f"{model_dir}/model-{final_milestone}.pt"
+                    print(f"  Expected model at: {model_path}")
+                    print(f"  File exists: {os.path.exists(model_path)}")
                 
-                mse_harder = self.evaluate_model(dataset, 'energy_hnm', ood=True,
+                result = self.evaluate_model(dataset, 'energy_hnm', ood=True,
                                                 num_candidates=num_cand,
                                                 refinement_steps=ref_steps,
                                                 lambda_weight=lambda_w)
+                mse_harder = result.get('mse_harder') if isinstance(result, dict) else result
+                if not (isinstance(result, dict) and result.get('success', True)):
+                    error_type = result.get('error', 'unknown') if isinstance(result, dict) else 'evaluation_failed'
+                    print(f"⚠️  Evaluation error for {config_name} on {dataset} harder: {error_type}")
+                    model_dir = self.get_result_dir(dataset, 'energy_hnm', num_cand, ref_steps, lambda_w)
+                    save_interval = 1000
+                    final_milestone = TRAIN_ITERATIONS // save_interval
+                    model_path = f"{model_dir}/model-{final_milestone}.pt"
+                    print(f"  Expected model at: {model_path}")
+                    print(f"  File exists: {os.path.exists(model_path)}")
                 
                 # Run diagnostics
                 model_dir = self.get_result_dir(dataset, 'energy_hnm', num_cand, ref_steps, lambda_w)
@@ -874,6 +1021,26 @@ class EnergyHNMSweepRunner:
         self.print_sweep_summary()
         self.save_results_json()
         self.generate_heatmaps()
+        
+        # Data quality summary before report generation
+        if hasattr(self, 'sweep_results') and self.sweep_results:
+            total_results = len(self.sweep_results)
+            valid_results = sum(1 for r in self.sweep_results if r.get('mse_harder') is not None)
+            print(f"\n{'='*80}")
+            print(f"SWEEP SUMMARY")
+            print(f"{'='*80}")
+            print(f"Total configurations: {total_results}")
+            print(f"Valid evaluations: {valid_results}")
+            print(f"Failed evaluations: {total_results - valid_results}")
+            success_rate = 100*valid_results/total_results if total_results > 0 else 0.0
+            print(f"Success rate: {success_rate:.1f}%")
+            
+            if valid_results == 0:
+                print(f"\n⚠️  WARNING: No valid evaluation results. Report will be incomplete.")
+            elif valid_results < total_results * 0.5:
+                print(f"\n⚠️  WARNING: Low evaluation success rate. Check for systematic issues.")
+            print(f"{'='*80}\n")
+        
         self.generate_markdown_report()
         
         return self.sweep_results
@@ -1239,10 +1406,15 @@ class EnergyHNMSweepRunner:
         lines = []
         
         # Analyze patterns across all tasks
-        all_hnm_results = [r for r in self.sweep_results if r['config_type'] == 'energy_hnm']
+        all_hnm_results = [r for r in self.sweep_results if r.get('config_type') == 'energy_hnm']
         
         if not all_hnm_results:
             return "No HNM results available for recommendations."
+        
+        # Check if we have valid evaluation results
+        if not any(r.get('mse_harder') for r in all_hnm_results):
+            total = len(all_hnm_results)
+            return f"⚠️ Cannot generate recommendations: 0/{total} configurations have valid MSE values."
         
         # Group by parameters
         by_candidates = defaultdict(list)
@@ -1250,10 +1422,10 @@ class EnergyHNMSweepRunner:
         by_lambda = defaultdict(list)
         
         for r in all_hnm_results:
-            if r['mse_harder']:
-                by_candidates[r['num_candidates']].append(r['mse_harder'])
-                by_refinement[r['refinement_steps']].append(r['mse_harder'])
-                by_lambda[r['lambda_weight']].append(r['mse_harder'])
+            if r.get('mse_harder'):
+                by_candidates[r.get('num_candidates')].append(r['mse_harder'])
+                by_refinement[r.get('refinement_steps')].append(r['mse_harder'])
+                by_lambda[r.get('lambda_weight')].append(r['mse_harder'])
         
         # Find best values
         best_candidates = min(by_candidates.items(), key=lambda x: np.mean(x[1]))[0] if by_candidates else None
@@ -1277,9 +1449,17 @@ class EnergyHNMSweepRunner:
         lines.append("\n### Key Insights\n")
         
         # Compute cost analysis
-        if all_hnm_results:
-            costs = [(r['num_candidates'] * r['refinement_steps'], r['mse_harder'], r['config_name']) 
-                    for r in all_hnm_results if r['mse_harder']]
+        if all_hnm_results and any(r.get('mse_harder') for r in all_hnm_results):
+            costs = [(r.get('num_candidates', 0) * r.get('refinement_steps', 0), r.get('mse_harder'), r.get('config_name', 'unnamed_config')) 
+                    for r in all_hnm_results if r.get('mse_harder')]
+            
+            if not costs:
+                # Belt-and-suspenders safety
+                none_count = sum(1 for r in all_hnm_results if not r.get('mse_harder'))
+                return '\n'.join(lines + [f"⚠️ Cannot generate cost analysis: {none_count}/{len(all_hnm_results)} "
+                                        f"configurations have missing evaluation results. Check that model files are "
+                                        f"being saved correctly and evaluation is completing successfully."])
+            
             costs.sort(key=lambda x: x[1])  # Sort by MSE
             
             best_performance = costs[0]
@@ -1291,6 +1471,10 @@ class EnergyHNMSweepRunner:
             
             lines.append(f"- **Best performance:** {best_performance[2]} (MSE: {best_performance[1]:.6f}, cost: {best_performance[0]}x)")
             lines.append(f"- **Best value:** {cheapest_good[2]} (MSE: {cheapest_good[1]:.6f}, cost: {cheapest_good[0]}x)")
+        else:
+            # No valid results at all
+            total = len(all_hnm_results) if all_hnm_results else 0
+            return '\n'.join(lines + [f"⚠️ Cannot generate recommendations: 0/{total} configurations have valid MSE values."])
         
         return '\n'.join(lines)
     

@@ -1,1 +1,9 @@
 *.pyc
+.claude/work
+*.aux
+*.out
+*.log
+*.syn
+*.synx
+*.fls
+*.fdb_latexmk

@@ -1,0 +1,50 @@
+\documentclass{article}
+
+\usepackage{amsmath,amssymb}
+\usepackage{algorithm}
+\usepackage[noend]{algpseudocode}
+
+\begin{document}
+\thispagestyle{empty}
+
+\begin{algorithm}[t]
+\caption{Adversarial Negative Mining (ANM) -- Key Steps}
+\label{alg:anm-simple}
+\begin{algorithmic}[1]
+\State \textbf{Input:} EBM $E_\theta(\cdot)$, initial corrupted label $\tilde y^{(0)}$ (from IRED),
+\Statex \hspace{\algorithmicindent} adversarial strength $\varepsilon$,
+\Statex \hspace{\algorithmicindent} step size $\eta_k$, decay factor $\alpha \in (0,1)$,
+\Statex \hspace{\algorithmicindent} number of adversarial steps $T_{\mathrm{adv}}$.
+\State \textbf{Output:} Adversarial negative $\tilde y^{-}$.
+
+\vspace{0.3em}
+\State $y^{\mathrm{orig}} \gets \tilde y^{(0)}$ \Comment anchor for distance penalty
+
+\For{$s = 0$ to $T_{\mathrm{adv}} - 1$}
+  \State \textit{(1) Energy gradient at current point}
+  \State $g^{(s)} \gets \nabla_{y} E_\theta(\tilde y^{(s)})$
+
+  \State \textit{(2) Distance penalty from start}
+  \State $d^{(s)} \gets \|\tilde y^{(s)} - y^{\mathrm{orig}}\|_2^2$
+  \State $\lambda_{\mathrm{pen}}^{(s)} \gets \varepsilon \cdot
+    \mathrm{clip}\!\left(\dfrac{1}{d^{(s)} + 10^{-6}},\, 0.1,\, 2.0\right)$
+  \State $h^{(s)} \gets \nabla_{y} d^{(s)}$
+
+  \State \textit{(3) Modified gradient (energy minus distance penalty)}
+  \State $\hat g^{(s)} \gets g^{(s)} - \lambda_{\mathrm{pen}}^{(s)} h^{(s)}$
+
+  \State \textit{(4) Decayed step size and update}
+  \State $\eta^{(s)} \gets \eta_k \alpha^{s}$
+  \State $\tilde y^{(s+1/2)} \gets \tilde y^{(s)} - \eta^{(s)} \hat g^{(s)}$
+
+  \State \textit{(5) Optional projection back to feasible set}
+  \State $\tilde y^{(s+1)} \gets \operatorname{Proj}_{\mathcal{C}}\!\left(\tilde y^{(s+1/2)}\right)$
+\EndFor
+
+\vspace{0.3em}
+\State $\tilde y^{-} \gets \tilde y^{(T_{\mathrm{adv}})}$ \Comment use as negative sample in contrastive loss
+
+\end{algorithmic}
+\end{algorithm}
+
+\end{document}

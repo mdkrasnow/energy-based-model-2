@@ -40,7 +40,6 @@ from diffusion_lib.denoising_diffusion_pytorch_1d import GaussianDiffusion1D
 from models import EBM, DiffusionWrapper
 from dataset import Addition, Inverse, LowRankDataset
 from diffusion_lib.adversarial_corruption import _adversarial_corruption
-from diffusion_lib.energy_hard_negatives import energy_based_hard_negative_mining
 
 
 # Hyperparameters from the paper (Appendix A)
@@ -244,9 +243,8 @@ class ExperimentRunner:
         
         return model, diffusion, device, dataset
     
-    def run_energy_diagnostics(self, model_dir, dataset='addition', num_batches=5, 
-                              hnm_num_candidates=10, hnm_refinement_steps=5, hnm_lambda_weight=1.0):
-        """Run energy distribution diagnostics on a trained model including HNM testing"""
+    def run_energy_diagnostics(self, model_dir, dataset='addition', num_batches=5):
+        """Run energy distribution diagnostics on a trained model"""
         result = self.load_model_for_diagnostics(model_dir)
         if result is None:
             return None
@@ -257,11 +255,10 @@ class ExperimentRunner:
             'clean': [],
             'ired_standard': [],
             'anm_adversarial': [],
-            'hnm_hard_negatives': [],
             'gaussian_noise': []
         }
         
-        print(f"  Running energy distribution analysis (including HNM with {hnm_num_candidates} candidates)...")
+        print(f"  Running energy distribution analysis...")
         
         for _ in range(num_batches):
             # Get test batch - properly split into input and output
@@ -290,21 +287,7 @@ class ExperimentRunner:
                 energy_anm = diffusion.energy_score(x_clean, y_anm, t)
                 energies['anm_adversarial'].append(energy_anm.mean().item())
             
-            # 4. HNM hard negative mining (actual energy-based hard negatives)
-            try:
-                y_hnm = self._simulate_hnm_corruption(x_clean, y_clean.clone(), t, diffusion, 
-                                                     num_candidates=hnm_num_candidates,
-                                                     refinement_steps=hnm_refinement_steps,
-                                                     lambda_weight=hnm_lambda_weight)
-                with torch.no_grad():
-                    energy_hnm = diffusion.energy_score(x_clean, y_hnm, t)
-                    energies['hnm_hard_negatives'].append(energy_hnm.mean().item())
-            except Exception as e:
-                print(f"    Warning: HNM failed for batch, skipping: {e}")
-                # Use a fallback value to maintain consistency
-                energies['hnm_hard_negatives'].append(float('nan'))
-            
-            # 5. Gaussian noise corruption (on output)
+            # 4. Gaussian noise corruption (on output)
             y_gaussian = y_clean + 0.1 * torch.randn_like(y_clean)
             with torch.no_grad():
                 energy_gaussian = diffusion.energy_score(x_clean, y_gaussian, t)
@@ -344,73 +327,6 @@ class ExperimentRunner:
             base_noise_scale=3.0,  # Standard base noise scale
             epsilon=anm_distance_penalty
         )
-
-    def _simulate_hnm_corruption(self, x_clean, y_clean, t, diffusion, 
-                                num_candidates=10, refinement_steps=5, lambda_weight=1.0):
-        """
-        Use actual energy-based hard negative mining (HNM) for diagnostic testing.
-        
-        This directly calls the energy_based_hard_negative_mining function to generate
-        hard negatives using the same algorithm as training. Use this method instead of
-        _simulate_anm_output when you want to test the specific HNM algorithm.
-        
-        Args:
-            x_clean: Input tensors (e.g., matrix A for inverse problems)
-            y_clean: Ground truth output tensors
-            t: Timestep tensor
-            diffusion: GaussianDiffusion1D object implementing DiffusionOps protocol
-            num_candidates: Number of landscape candidates to generate (must be > 0)
-            refinement_steps: Energy descent steps per candidate (must be > 0)
-            lambda_weight: Balance between energy and error in selection (typically 0.1-2.0)
-        """
-        
-        # Parameter validation
-        if num_candidates <= 0:
-            raise ValueError(f"num_candidates must be > 0, got {num_candidates}")
-        if refinement_steps <= 0:
-            raise ValueError(f"refinement_steps must be > 0, got {refinement_steps}")
-        if lambda_weight <= 0:
-            raise ValueError(f"lambda_weight must be > 0, got {lambda_weight}")
-        
-        # Ensure tensors are on the same device as the diffusion model
-        device = next(diffusion.model.parameters()).device
-        x_clean = x_clean.to(device)
-        y_clean = y_clean.to(device)
-        t = t.to(device)
-        
-        # Data scale check - only print once per batch
-        if not hasattr(self, '_hnm_scale_printed'):
-            print("=" * 60)
-            print("USING ENERGY-BASED HARD NEGATIVE MINING:")
-            print(f"Clean output norm: {y_clean.norm(dim=-1).mean().item():.6f}")
-            print(f"Clean output range: {y_clean.min().item():.6f} to {y_clean.max().item():.6f}")
-            print(f"HNM num_candidates: {num_candidates}")
-            print(f"HNM refinement_steps: {refinement_steps}")
-            print(f"HNM lambda_weight: {lambda_weight}")
-            print("=" * 60)
-            self._hnm_scale_printed = True
-        
-        try:
-            # Call the actual energy-based hard negative mining function
-            y_hnm = energy_based_hard_negative_mining(
-                ops=diffusion,  # diffusion object implements DiffusionOps protocol
-                inp=x_clean,    # Input conditioning (matrix A for inverse problems)
-                x_start=y_clean, # Ground truth solution
-                t=t,            # Timestep
-                mask=None,      # No masking in diagnostic context
-                data_cond=None, # No conditioning in diagnostic context
-                num_candidates=num_candidates,
-                refinement_steps=refinement_steps,
-                lambda_weight=lambda_weight
-            )
-            return y_hnm
-        except Exception as e:
-            print(f"Warning: HNM failed with error: {e}")
-            print("Falling back to standard IRED corruption...")
-            # Fallback to standard IRED corruption if HNM fails
-            noise = torch.randn_like(y_clean)
-            alpha = 1.0 - (t.float() / diffusion.num_timesteps).view(-1, 1)
-            return alpha * y_clean + (1 - alpha) * noise
 
     def run_comparative_diagnostics(self, baseline_dir, anm_dir, dataset='addition', config_name='default'):
         """Critical test: Direct comparison on same batch"""
@@ -458,21 +374,17 @@ class ExperimentRunner:
         }
     
     def train_model(self, dataset, model_type='baseline', force_retrain=False, 
-                   epsilon=None, adv_steps=None, train_steps=None, distance_penalty=None,
-                   hnm_num_candidates=10, hnm_refinement_steps=5, hnm_lambda_weight=1.0):
+                   epsilon=None, adv_steps=None, train_steps=None, distance_penalty=None):
         """Train a model for a specific dataset and model type
         
         Args:
             dataset: Dataset name
-            model_type: One of 'baseline', 'anm' (which always uses curriculum with HNM)
+            model_type: One of 'baseline', 'anm' (which always uses curriculum)
             force_retrain: Force retraining even if model exists
             epsilon: ANM epsilon override (for hyperparameter search)
             adv_steps: ANM adversarial steps override (for hyperparameter search)
             train_steps: Training steps override (default: TRAIN_ITERATIONS)
             distance_penalty: ANM distance penalty override (for hyperparameter search)
-            hnm_num_candidates: HNM number of landscape candidates (default: 10)
-            hnm_refinement_steps: HNM energy descent steps per candidate (default: 5) 
-            hnm_lambda_weight: HNM balance between energy and error (default: 1.0)
         """
         result_dir = self.get_result_dir(dataset, model_type, epsilon, adv_steps, distance_penalty)
         actual_train_steps = train_steps if train_steps is not None else TRAIN_ITERATIONS
@@ -487,10 +399,7 @@ class ExperimentRunner:
             
             # Run diagnostics on existing model
             print(f"Running diagnostics on existing {model_type} model...")
-            energies = self.run_energy_diagnostics(result_dir, dataset,
-                                                  hnm_num_candidates=hnm_num_candidates,
-                                                  hnm_refinement_steps=hnm_refinement_steps,
-                                                  hnm_lambda_weight=hnm_lambda_weight)
+            energies = self.run_energy_diagnostics(result_dir, dataset)
             if energies:
                 self.diagnostic_results[f'{dataset}_{model_type}']['energies'] = energies
                 self._print_energy_summary(energies, model_type)
@@ -511,13 +420,12 @@ class ExperimentRunner:
         print(f"Result directory: {result_dir}")
         
         if model_type == 'anm':
-            print(f"\nANM with AGGRESSIVE Curriculum Schedule + HNM (% of {TRAIN_ITERATIONS} steps):")
-            print(f"  Warmup (0-10%): 100% clean, 0% adversarial, 0% HNM, ε=0.0")
-            print(f"  Rapid Introduction (10-25%): 40% clean, 30% adversarial, 20% HNM, 10% gaussian, ε=0.3")
-            print(f"  Aggressive Ramp (25-50%): 10% clean, 30% adversarial, 50% HNM, 10% gaussian, ε=0.7")
-            print(f"  High Intensity (50-80%): 5% clean, 25% adversarial, 65% HNM, 5% gaussian, ε=1.0")
-            print(f"  Extreme Hardening (80-100%): 3% clean, 22% adversarial, 70% HNM, 5% gaussian, ε=1.2")
-            print(f"  HNM Parameters: candidates={hnm_num_candidates}, refinement_steps={hnm_refinement_steps}, lambda={hnm_lambda_weight}")
+            print(f"\nANM with AGGRESSIVE Curriculum Schedule (% of {TRAIN_ITERATIONS} steps):")
+            print(f"  Warmup (0-10%): 100% clean, 0% adversarial, ε=0.0")
+            print(f"  Rapid Introduction (10-25%): 50% clean, 40% adversarial, 10% gaussian, ε=0.3")
+            print(f"  Aggressive Ramp (25-50%): 20% clean, 70% adversarial, 10% gaussian, ε=0.7")
+            print(f"  High Intensity (50-80%): 10% clean, 85% adversarial, 5% gaussian, ε=1.0")
+            print(f"  Extreme Hardening (80-100%): 5% clean, 90% adversarial, 5% gaussian, ε=1.2")
             
         print(f"{'='*80}\n")
         sys.stdout.flush()
@@ -549,11 +457,6 @@ class ExperimentRunner:
                 '--anm-clean-ratio', '0.1',
                 '--anm-adversarial-ratio', '0.8',
                 '--anm-gaussian-ratio', '0.1',
-                '--anm-hard-negative-ratio', '0.0',
-                # HNM parameters (used when curriculum includes hard_negative_ratio > 0)
-                '--hnm-num-candidates', str(hnm_num_candidates),
-                '--hnm-refinement-steps', str(hnm_refinement_steps),
-                '--hnm-lambda-weight', str(hnm_lambda_weight),
                 # ANM now always uses curriculum, no need for --use-curriculum flag
             ])
         
@@ -588,10 +491,7 @@ class ExperimentRunner:
                 
                 # Run diagnostics immediately after training
                 print(f"Running diagnostics on newly trained {model_type} model...")
-                energies = self.run_energy_diagnostics(result_dir, dataset,
-                                                      hnm_num_candidates=hnm_num_candidates,
-                                                      hnm_refinement_steps=hnm_refinement_steps,
-                                                      hnm_lambda_weight=hnm_lambda_weight)
+                energies = self.run_energy_diagnostics(result_dir, dataset)
                 if energies:
                     self.diagnostic_results[f'{dataset}_{model_type}']['energies'] = energies
                     self._print_energy_summary(energies, model_type)
@@ -620,51 +520,22 @@ class ExperimentRunner:
             std_energy = np.std(values)
             print(f"  {corruption_type:20s}: {mean_energy:.4f} ± {std_energy:.4f}")
         
-        # Key insights for ANM and HNM
+        # Key insight for ANM
         if model_type == 'anm':
             mean_ired = np.mean(energies['ired_standard'])
             mean_anm = np.mean(energies['anm_adversarial'])
-            anm_improvement = ((mean_anm - mean_ired) / abs(mean_ired)) * 100
+            improvement = ((mean_anm - mean_ired) / abs(mean_ired)) * 100
             
             print("\n  " + "="*50)
             print("  ANM DIAGNOSTIC:")
-            if abs(anm_improvement) < 5:
+            if abs(improvement) < 5:
                 print("  ❌ ANM energies ≈ IRED energies → ANM is REDUNDANT")
-            elif anm_improvement < -10:
+            elif improvement < -10:
                 print("  ⚠️  ANM energies < IRED energies → ANM is TOO WEAK")
-            elif anm_improvement > 50:
+            elif improvement > 50:
                 print("  ⚠️  ANM energies >> IRED energies → ANM may be OFF-MANIFOLD")
             else:
-                print(f"  ✓ ANM provides {anm_improvement:.1f}% energy increase over IRED")
-            
-            # HNM diagnostic if available
-            if 'hnm_hard_negatives' in energies:
-                hnm_values = [v for v in energies['hnm_hard_negatives'] if not np.isnan(v)]
-                if hnm_values:
-                    mean_hnm = np.mean(hnm_values)
-                    hnm_improvement = ((mean_hnm - mean_ired) / abs(mean_ired)) * 100
-                    hnm_vs_anm = ((mean_hnm - mean_anm) / abs(mean_anm)) * 100
-                    
-                    print("\n  HNM DIAGNOSTIC:")
-                    if abs(hnm_improvement) < 5:
-                        print("  ❌ HNM energies ≈ IRED energies → HNM is REDUNDANT")
-                    elif hnm_improvement < -10:
-                        print("  ⚠️  HNM energies < IRED energies → HNM is HARMFUL")
-                    elif hnm_improvement > 50:
-                        print("  ⚠️  HNM energies >> IRED energies → HNM may be OFF-MANIFOLD")
-                    else:
-                        print(f"  ✓ HNM provides {hnm_improvement:.1f}% energy increase over IRED")
-                    
-                    print(f"  📊 HNM vs ANM: {hnm_vs_anm:+.1f}% energy difference")
-                    if abs(hnm_vs_anm) < 5:
-                        print("     → HNM and ANM are equivalent")
-                    elif hnm_vs_anm > 10:
-                        print("     → HNM significantly outperforms ANM!")
-                    elif hnm_vs_anm < -10:
-                        print("     → ANM outperforms HNM")
-                else:
-                    print("\n  ❌ HNM DIAGNOSTIC: All HNM attempts failed")
-            
+                print(f"  ✓ ANM provides {improvement:.1f}% energy increase over IRED")
             print("  " + "="*50 + "\n")
     
     def run_hyperparameter_sweep(self, dataset='addition', force_retrain=False):
@@ -822,156 +693,6 @@ class ExperimentRunner:
         self._save_sweep_results(sweep_results, dataset, train_steps)
         
         return sweep_results
-    
-    def run_hnm_hyperparameter_sweep(self, dataset='addition', force_retrain=False, train_steps=None):
-        """Run systematic hyperparameter sweep specifically for HNM parameters"""
-        
-        actual_train_steps = train_steps if train_steps is not None else 15000  # Shorter for HNM sweep
-        
-        # Define HNM parameter combinations to test
-        # Focus on key parameters that affect HNM performance
-        hnm_configs = [
-            # Baseline configurations  
-            {'candidates': 5, 'refinement': 3, 'lambda': 1.0, 'focus': 'fast_weak'},
-            {'candidates': 10, 'refinement': 5, 'lambda': 1.0, 'focus': 'balanced_default'},
-            {'candidates': 20, 'refinement': 7, 'lambda': 1.0, 'focus': 'thorough_strong'},
-            
-            # Lambda weight variations (balance between energy and error)
-            {'candidates': 10, 'refinement': 5, 'lambda': 0.5, 'focus': 'energy_focused'},
-            {'candidates': 10, 'refinement': 5, 'lambda': 2.0, 'focus': 'error_focused'},
-            
-            # Refinement step variations 
-            {'candidates': 10, 'refinement': 2, 'lambda': 1.0, 'focus': 'minimal_refinement'},
-            {'candidates': 10, 'refinement': 10, 'lambda': 1.0, 'focus': 'deep_refinement'},
-            
-            # Candidate count variations
-            {'candidates': 3, 'refinement': 5, 'lambda': 1.0, 'focus': 'few_candidates'},
-            {'candidates': 30, 'refinement': 5, 'lambda': 1.0, 'focus': 'many_candidates'},
-        ]
-        
-        print(f"\n{'#'*80}")
-        print(f"# HNM HYPERPARAMETER SWEEP")
-        print(f"# Dataset: {dataset}")
-        print(f"# Training steps: {actual_train_steps}")
-        print(f"# Total configurations: {len(hnm_configs)}")
-        print(f"# Parameters being swept:")
-        print(f"#   - hnm_num_candidates: [3, 5, 10, 20, 30]")
-        print(f"#   - hnm_refinement_steps: [2, 3, 5, 7, 10]")
-        print(f"#   - hnm_lambda_weight: [0.5, 1.0, 2.0]")
-        print(f"# Fixed: aggressive curriculum with high hard_negative_ratio")
-        print(f"{'#'*80}\n")
-        
-        # Train baseline once if needed
-        baseline_dir = self.get_result_dir(dataset, 'baseline')
-        if not os.path.exists(f'{baseline_dir}/model-20.pt') or force_retrain:
-            print("Training baseline model first...")
-            self.train_model(dataset, 'baseline', force_retrain, train_steps=actual_train_steps)
-        
-        # Collect baseline reference metrics
-        print("\nCollecting baseline (IRED) reference metrics...")
-        baseline_energies = self.run_energy_diagnostics(baseline_dir, dataset)
-        baseline_mse_same = self.evaluate_model(dataset, 'baseline', ood=False)
-        baseline_mse_harder = self.evaluate_model(dataset, 'baseline', ood=True)
-        
-        # Store results
-        hnm_sweep_results = [{
-            'config': 'baseline',
-            'candidates': None,
-            'refinement': None,
-            'lambda_weight': None,
-            'mse_same': baseline_mse_same,
-            'mse_harder': baseline_mse_harder,
-            'energies': baseline_energies,
-            'hnm_vs_ired': None,
-            'hnm_vs_anm': None
-        }]
-        
-        # Run HNM configurations
-        config_num = 0
-        for config in hnm_configs:
-            config_num += 1
-            candidates = config['candidates']
-            refinement = config['refinement']
-            lambda_weight = config['lambda']
-            focus = config['focus']
-            
-            config_name = f"hnm_c{candidates}_r{refinement}_l{lambda_weight:.1f}_{focus}"
-            
-            print(f"\n{'='*80}")
-            print(f"HNM CONFIG {config_num}/{len(hnm_configs)}: {focus}")
-            print(f"  candidates={candidates}, refinement_steps={refinement}, lambda_weight={lambda_weight}")
-            print(f"{'='*80}")
-            
-            # Train model with these HNM parameters (using default ANM parameters)
-            success = self.train_model(
-                dataset, 
-                model_type='anm',
-                force_retrain=force_retrain,
-                train_steps=actual_train_steps,
-                hnm_num_candidates=candidates,
-                hnm_refinement_steps=refinement,
-                hnm_lambda_weight=lambda_weight
-            )
-            
-            if success:
-                # Get model directory (uses default ANM parameters in directory name)
-                anm_dir = self.get_result_dir(dataset, 'anm')
-                
-                # Run HNM-specific diagnostics with these parameters
-                energies = self.run_energy_diagnostics(anm_dir, dataset,
-                                                     hnm_num_candidates=candidates,
-                                                     hnm_refinement_steps=refinement,
-                                                     hnm_lambda_weight=lambda_weight)
-                
-                # Evaluate performance
-                mse_same = self.evaluate_model(dataset, 'anm', ood=False)
-                mse_harder = self.evaluate_model(dataset, 'anm', ood=True)
-                
-                # Calculate HNM performance metrics
-                hnm_vs_ired = None
-                hnm_vs_anm = None
-                if energies and 'hnm_hard_negatives' in energies and baseline_energies:
-                    hnm_values = [v for v in energies['hnm_hard_negatives'] if not np.isnan(v)]
-                    if hnm_values and 'ired_standard' in baseline_energies:
-                        mean_hnm = np.mean(hnm_values)
-                        mean_ired = np.mean(baseline_energies['ired_standard'])
-                        hnm_vs_ired = ((mean_hnm - mean_ired) / abs(mean_ired)) * 100
-                        
-                        if 'anm_adversarial' in energies:
-                            mean_anm = np.mean(energies['anm_adversarial'])
-                            hnm_vs_anm = ((mean_hnm - mean_anm) / abs(mean_anm)) * 100
-                
-                # Store results
-                result = {
-                    'config': config_name,
-                    'candidates': candidates,
-                    'refinement': refinement,
-                    'lambda_weight': lambda_weight,
-                    'focus': focus,
-                    'mse_same': mse_same,
-                    'mse_harder': mse_harder,
-                    'energies': energies,
-                    'hnm_vs_ired': hnm_vs_ired,
-                    'hnm_vs_anm': hnm_vs_anm
-                }
-                hnm_sweep_results.append(result)
-                
-                # Print quick summary
-                print(f"\n  ✓ HNM Config complete:")
-                if hnm_vs_ired is not None:
-                    print(f"    HNM vs IRED: {hnm_vs_ired:+.1f}%")
-                if hnm_vs_anm is not None:
-                    print(f"    HNM vs ANM: {hnm_vs_anm:+.1f}%")
-                if mse_harder:
-                    print(f"    MSE (harder): {mse_harder:.4f}")
-            else:
-                print("  ✗ Training failed for this HNM config")
-        
-        # Analyze and report HNM sweep results
-        self._print_hnm_sweep_summary(hnm_sweep_results, dataset)
-        self._save_hnm_sweep_results(hnm_sweep_results, dataset, actual_train_steps)
-        
-        return hnm_sweep_results
     
     def evaluate_model_with_config(self, dataset, epsilon, adv_steps, ood=False, train_steps=None, distance_penalty=None):
         """Evaluate a model trained with specific hyperparameters"""
@@ -1667,125 +1388,6 @@ class ExperimentRunner:
         print("\n" + "="*80)
         print("END OF DIAGNOSTIC SUMMARY")
         print("="*80 + "\n")
-
-    def _print_hnm_sweep_summary(self, hnm_sweep_results, dataset):
-        """Print summary of HNM hyperparameter sweep results"""
-        print(f"\n{'#'*80}")
-        print(f"# HNM HYPERPARAMETER SWEEP RESULTS - {dataset.upper()}")
-        print(f"{'#'*80}\n")
-        
-        # Sort by HNM vs IRED improvement (descending)
-        anm_results = [r for r in hnm_sweep_results if r['config'] != 'baseline']
-        sorted_results = sorted(anm_results, key=lambda x: x['hnm_vs_ired'] or -999, reverse=True)
-        
-        print(f"{'Config':<20s} {'Cand':>5s} {'Refine':>7s} {'Lambda':>7s} {'HNM vs IRED':>12s} {'HNM vs ANM':>11s} {'MSE (harder)':>13s} {'Focus':>15s}")
-        print("-" * 100)
-        
-        # Print baseline row first
-        baseline = next((r for r in hnm_sweep_results if r['config'] == 'baseline'), None)
-        if baseline:
-            mse_harder_str = f"{baseline['mse_harder']:.4f}" if baseline['mse_harder'] is not None else "N/A"
-            print(f"{'BASELINE (IRED)':<20s} {'-':>5s} {'-':>7s} {'-':>7s} {'-':>12s} {'-':>11s} {mse_harder_str:>13s} {'reference':>15s}")
-        
-        # Print HNM configurations sorted by performance
-        for r in sorted_results:
-            hnm_ired_str = f"{r['hnm_vs_ired']:+.1f}%" if r['hnm_vs_ired'] is not None else "N/A"
-            hnm_anm_str = f"{r['hnm_vs_anm']:+.1f}%" if r['hnm_vs_anm'] is not None else "N/A"
-            mse_harder_str = f"{r['mse_harder']:.4f}" if r['mse_harder'] is not None else "N/A"
-            
-            print(f"{r['config']:<20s} {r['candidates']:>5d} {r['refinement']:>7d} {r['lambda_weight']:>7.1f} {hnm_ired_str:>12s} {hnm_anm_str:>11s} {mse_harder_str:>13s} {r['focus']:>15s}")
-        
-        # Analysis and recommendations
-        print(f"\n{'='*80}")
-        print("HNM ANALYSIS & RECOMMENDATIONS:")
-        print("="*80)
-        
-        # Find best configurations
-        best_hnm_ired = max(anm_results, key=lambda x: x['hnm_vs_ired'] or -999)
-        best_mse = min([r for r in anm_results if r['mse_harder']], key=lambda x: x['mse_harder'] or float('inf'))
-        
-        print(f"\n✓ BEST HNM vs IRED PERFORMANCE:")
-        if best_hnm_ired['hnm_vs_ired'] and best_hnm_ired['hnm_vs_ired'] > 5:
-            print(f"  Config: {best_hnm_ired['focus']} ({best_hnm_ired['hnm_vs_ired']:+.1f}% improvement)")
-            print(f"  Parameters: candidates={best_hnm_ired['candidates']}, refinement={best_hnm_ired['refinement']}, lambda={best_hnm_ired['lambda_weight']}")
-        else:
-            print("  ❌ No HNM configuration significantly outperformed IRED")
-        
-        print(f"\n✓ BEST OVERALL MSE PERFORMANCE:")
-        if best_mse['mse_harder']:
-            print(f"  Config: {best_mse['focus']} (MSE: {best_mse['mse_harder']:.4f})")
-            print(f"  Parameters: candidates={best_mse['candidates']}, refinement={best_mse['refinement']}, lambda={best_mse['lambda_weight']}")
-        
-        # Pattern analysis
-        print(f"\n📊 PARAMETER SENSITIVITY ANALYSIS:")
-        
-        # Group by parameter to see patterns
-        by_candidates = {}
-        by_refinement = {}
-        by_lambda = {}
-        
-        for r in anm_results:
-            if r['hnm_vs_ired'] is not None:
-                # Group by candidates
-                cand = r['candidates']
-                if cand not in by_candidates:
-                    by_candidates[cand] = []
-                by_candidates[cand].append(r['hnm_vs_ired'])
-                
-                # Group by refinement
-                ref = r['refinement']
-                if ref not in by_refinement:
-                    by_refinement[ref] = []
-                by_refinement[ref].append(r['hnm_vs_ired'])
-                
-                # Group by lambda
-                lam = r['lambda_weight']
-                if lam not in by_lambda:
-                    by_lambda[lam] = []
-                by_lambda[lam].append(r['hnm_vs_ired'])
-        
-        # Print sensitivity analysis
-        if by_candidates:
-            print("  Candidates sensitivity:")
-            for cand in sorted(by_candidates.keys()):
-                avg_perf = np.mean(by_candidates[cand])
-                print(f"    {cand:2d} candidates: {avg_perf:+.1f}% avg improvement")
-        
-        if by_refinement:
-            print("  Refinement steps sensitivity:")
-            for ref in sorted(by_refinement.keys()):
-                avg_perf = np.mean(by_refinement[ref])
-                print(f"    {ref:2d} refinement: {avg_perf:+.1f}% avg improvement")
-        
-        if by_lambda:
-            print("  Lambda weight sensitivity:")
-            for lam in sorted(by_lambda.keys()):
-                avg_perf = np.mean(by_lambda[lam])
-                print(f"    {lam:.1f} lambda:    {avg_perf:+.1f}% avg improvement")
-        
-        print(f"\n{'='*80}\n")
-
-    def _save_hnm_sweep_results(self, hnm_sweep_results, dataset, train_steps):
-        """Save HNM sweep results to JSON"""
-        results_file = self.base_dir / f'hnm_hyperparameter_sweep_{dataset}_{train_steps}steps.json'
-        
-        data = {
-            'metadata': {
-                'dataset': dataset,
-                'train_steps': train_steps,
-                'sweep_type': 'hnm_hyperparameters',
-                'parameters_swept': ['hnm_num_candidates', 'hnm_refinement_steps', 'hnm_lambda_weight'],
-                'total_configs': len(hnm_sweep_results) - 1,  # Exclude baseline
-                'includes_baseline': True,
-                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-            },
-            'hnm_sweep_results': hnm_sweep_results
-        }
-        
-        with open(results_file, 'w') as f:
-            json.dump(data, f, indent=2)
-        
-        print(f"HNM sweep results saved to: {results_file}")
 
 # Initialize runner with base directory
 if __name__ == "__main__":

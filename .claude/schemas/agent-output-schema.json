@@ -1,0 +1,288 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Multi-Agent Debate Solution Output",
+  "description": "Schema for solution agent outputs across all debate rounds",
+  "type": "object",
+  "required": [
+    "round",
+    "agent_id",
+    "perspective",
+    "timestamp",
+    "problem_understanding",
+    "solution_steps",
+    "key_assumptions",
+    "confidence",
+    "confidence_reasoning"
+  ],
+  "properties": {
+    "round": {
+      "type": "integer",
+      "enum": [1, 2, 3],
+      "description": "Current debate round (1=independent, 2=adversarial, 3=cooperative)"
+    },
+    "agent_id": {
+      "type": "string",
+      "enum": ["agent-1", "agent-2", "agent-3"],
+      "description": "Unique identifier for this agent"
+    },
+    "perspective": {
+      "type": "string",
+      "enum": ["simplicity", "robustness", "maintainability"],
+      "description": "The perspective this agent focuses on"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp when this output was generated"
+    },
+    "problem_understanding": {
+      "type": "string",
+      "description": "Agent's restatement of the problem to demonstrate comprehension",
+      "minLength": 50
+    },
+    "solution_steps": {
+      "type": "array",
+      "description": "Ordered list of steps to solve the problem",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "step_number",
+          "action",
+          "rationale",
+          "estimated_effort",
+          "risks",
+          "dependencies"
+        ],
+        "properties": {
+          "step_number": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Sequential step number"
+          },
+          "action": {
+            "type": "string",
+            "description": "Concrete action to take in this step",
+            "minLength": 20
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Why this step is necessary and how it addresses the problem",
+            "minLength": 30
+          },
+          "estimated_effort": {
+            "type": "string",
+            "description": "Rough time estimate (e.g., '30min', '2 hours', '1 day')",
+            "pattern": "^\\d+\\s*(min|mins|minute|minutes|hour|hours|hr|hrs|day|days|week|weeks)$"
+          },
+          "risks": {
+            "type": "array",
+            "description": "Potential risks or concerns with this step",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dependencies": {
+            "type": "array",
+            "description": "What must be true or complete before this step",
+            "items": {
+              "type": "string"
+            }
+          },
+          "revision_reason": {
+            "type": "string",
+            "description": "Why this step changed from previous round (Round 2+ only)"
+          },
+          "synthesis_notes": {
+            "type": "string",
+            "description": "What was incorporated from other agents (Round 3 only)"
+          }
+        }
+      }
+    },
+    "key_assumptions": {
+      "type": "array",
+      "description": "Explicit assumptions being made in this solution",
+      "items": {
+        "type": "string",
+        "minLength": 10
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Confidence level in this solution (0.0 = no confidence, 1.0 = complete confidence)"
+    },
+    "confidence_reasoning": {
+      "type": "string",
+      "description": "Explanation for the confidence level",
+      "minLength": 30
+    },
+    "changes_from_previous": {
+      "type": "string",
+      "description": "Summary of what changed from previous round (Round 2+ only)"
+    },
+    "critiques_given": {
+      "type": "array",
+      "description": "Critiques of other agents' solutions (Round 2+ only)",
+      "items": {
+        "type": "object",
+        "required": ["to_agent", "critique", "severity"],
+        "properties": {
+          "to_agent": {
+            "type": "string",
+            "enum": ["agent-1", "agent-2", "agent-3"],
+            "description": "Which agent this critique is directed at"
+          },
+          "critique": {
+            "type": "string",
+            "description": "The specific critique or concern",
+            "minLength": 30
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "How serious this issue is"
+          },
+          "specific_step": {
+            "type": "integer",
+            "description": "Step number this critique applies to (if applicable)"
+          }
+        }
+      }
+    },
+    "critiques_received_and_responses": {
+      "type": "array",
+      "description": "How this agent responded to critiques from others (Round 2+ only)",
+      "items": {
+        "type": "object",
+        "required": ["from_agent", "their_critique", "your_response", "reasoning"],
+        "properties": {
+          "from_agent": {
+            "type": "string",
+            "enum": ["agent-1", "agent-2", "agent-3"],
+            "description": "Which agent gave this critique"
+          },
+          "their_critique": {
+            "type": "string",
+            "description": "Brief summary of their critique"
+          },
+          "your_response": {
+            "type": "string",
+            "enum": ["valid_incorporated", "valid_rejected", "invalid"],
+            "description": "How you responded to this critique"
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you incorporated, rejected, or considered it invalid",
+            "minLength": 20
+          }
+        }
+      }
+    },
+    "consensus_areas": {
+      "type": "array",
+      "description": "Areas where all agents agree (Round 3 only)",
+      "items": {
+        "type": "string"
+      }
+    },
+    "remaining_disagreements": {
+      "type": "array",
+      "description": "Points of continued disagreement (Round 3 only)",
+      "items": {
+        "type": "object",
+        "required": ["topic", "my_position", "others_positions", "proposed_resolution"],
+        "properties": {
+          "topic": {
+            "type": "string",
+            "description": "What the disagreement is about"
+          },
+          "my_position": {
+            "type": "string",
+            "description": "This agent's stance"
+          },
+          "others_positions": {
+            "type": "string",
+            "description": "Summary of other agents' stances"
+          },
+          "proposed_resolution": {
+            "type": "string",
+            "description": "How this agent suggests resolving the disagreement"
+          }
+        }
+      }
+    },
+    "synthesis_contributions": {
+      "type": "array",
+      "description": "What this agent borrowed from others (Round 3 only)",
+      "items": {
+        "type": "object",
+        "required": ["from_agent", "contribution", "integration"],
+        "properties": {
+          "from_agent": {
+            "type": "string",
+            "enum": ["agent-1", "agent-2", "agent-3"],
+            "description": "Which agent this insight came from"
+          },
+          "contribution": {
+            "type": "string",
+            "description": "What insight or approach was borrowed"
+          },
+          "integration": {
+            "type": "string",
+            "description": "How it was integrated into this agent's solution"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "round": { "const": 1 } }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["changes_from_previous"] },
+            { "required": ["critiques_given"] },
+            { "required": ["critiques_received_and_responses"] },
+            { "required": ["consensus_areas"] },
+            { "required": ["remaining_disagreements"] },
+            { "required": ["synthesis_contributions"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "round": { "const": 2 } }
+      },
+      "then": {
+        "required": ["changes_from_previous", "critiques_given", "critiques_received_and_responses"],
+        "not": {
+          "anyOf": [
+            { "required": ["consensus_areas"] },
+            { "required": ["remaining_disagreements"] },
+            { "required": ["synthesis_contributions"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "round": { "const": 3 } }
+      },
+      "then": {
+        "required": [
+          "changes_from_previous",
+          "consensus_areas",
+          "remaining_disagreements",
+          "synthesis_contributions"
+        ]
+      }
+    }
+  ]
+}

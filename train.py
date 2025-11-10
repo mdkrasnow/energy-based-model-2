@@ -498,7 +498,26 @@ if __name__ == "__main__":
                 result_dir = result_dir + f'_dp{FLAGS.anm_distance_penalty}'
         else:
             result_dir = result_dir + '_anm_curriculum'  # Default ANM
-    os.makedirs(result_dir, exist_ok=True)
+    print(f"DEBUG: Creating results directory: {result_dir}")
+    try:
+        os.makedirs(result_dir, exist_ok=True)
+        print(f"DEBUG: Results directory created successfully: {result_dir}")
+        
+        # Verify the directory was actually created and is writable
+        if not os.path.exists(result_dir):
+            raise OSError(f"Directory creation appeared successful but path doesn't exist: {result_dir}")
+        if not os.path.isdir(result_dir):
+            raise OSError(f"Path exists but is not a directory: {result_dir}")
+        if not os.access(result_dir, os.W_OK):
+            raise OSError(f"Directory exists but is not writable: {result_dir}")
+            
+        print(f"DEBUG: Directory verification passed: {result_dir}")
+        
+    except Exception as e:
+        print(f"ERROR: Failed to create results directory '{result_dir}': {e}")
+        import traceback
+        print(f"ERROR: Traceback: {traceback.format_exc()}")
+        raise
 
     if FLAGS.latent:
         # Load the decoder

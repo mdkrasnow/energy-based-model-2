@@ -881,7 +881,24 @@ class Trainer1D(object):
             self.ema.to(self.device)
 
         self.results_folder = Path(results_folder)
-        self.results_folder.mkdir(parents=True, exist_ok=True)
+        print(f"DEBUG: Setting results folder to: {self.results_folder}")
+        
+        try:
+            self.results_folder.mkdir(parents=True, exist_ok=True)
+            print(f"DEBUG: Results folder created successfully: {self.results_folder}")
+            print(f"DEBUG: Results folder exists: {self.results_folder.exists()}")
+            print(f"DEBUG: Results folder is directory: {self.results_folder.is_dir()}")
+            
+            # Check permissions
+            import os
+            if self.results_folder.exists():
+                print(f"DEBUG: Results folder readable: {os.access(self.results_folder, os.R_OK)}")
+                print(f"DEBUG: Results folder writable: {os.access(self.results_folder, os.W_OK)}")
+                print(f"DEBUG: Results folder absolute path: {self.results_folder.absolute()}")
+        except Exception as e:
+            print(f"ERROR: Failed to create results folder: {e}")
+            import traceback
+            print(f"ERROR: Traceback: {traceback.format_exc()}")
 
         # step counter state
 
@@ -897,11 +914,16 @@ class Trainer1D(object):
         return self.accelerator.device
 
     def save(self, milestone):
+        print(f"DEBUG: save() called with milestone={milestone}")
         if not self.accelerator.is_local_main_process:
+            print(f"DEBUG: Not main process, skipping save")
             return
 
+        print(f"DEBUG: Main process confirmed, proceeding with save")
+        
         # Properly unwrap the model to avoid prefix issues
         unwrapped_model = self.accelerator.unwrap_model(self.model)
+        print(f"DEBUG: Model unwrapped successfully")
         
         data = {
             'step': self.step,
@@ -910,8 +932,51 @@ class Trainer1D(object):
             'ema': self.ema.state_dict(),
             'scaler': self.accelerator.scaler.state_dict() if exists(self.accelerator.scaler) else None,
         }
+        print(f"DEBUG: Save data dictionary created with step={self.step}")
 
-        torch.save(data, str(self.results_folder / f'model-{milestone}.pt'))
+        save_path = str(self.results_folder / f'model-{milestone}.pt')
+        print(f"DEBUG: Attempting to save to: {save_path}")
+        print(f"DEBUG: Results folder exists: {self.results_folder.exists()}")
+        print(f"DEBUG: Results folder is directory: {self.results_folder.is_dir()}")
+        
+        # Ensure the directory exists before saving (with race condition protection)
+        if not self.results_folder.exists():
+            print(f"WARNING: Results folder doesn't exist, creating: {self.results_folder}")
+            try:
+                # Use exist_ok=True to handle race conditions from multiple processes
+                self.results_folder.mkdir(parents=True, exist_ok=True)
+                print(f"DEBUG: Created missing results folder: {self.results_folder}")
+            except Exception as create_error:
+                print(f"ERROR: Failed to create results folder: {create_error}")
+                raise
+        
+        try:
+            torch.save(data, save_path)
+            print(f"DEBUG: Model saved successfully to: {save_path}")
+            
+            # Add filesystem sync for NFS compatibility
+            import os
+            import time
+            try:
+                # Flush to disk
+                with open(save_path, 'r+b') as f:
+                    os.fsync(f.fileno())
+                # Allow NFS cache propagation
+                time.sleep(2)
+                print(f"Checkpoint flushed to filesystem: {save_path}")
+            except Exception as e:
+                print(f"Warning: Could not fsync checkpoint: {e}")
+            
+            # Verify the file was actually created
+            if os.path.exists(save_path):
+                file_size = os.path.getsize(save_path)
+                print(f"DEBUG: Saved file verified. Size: {file_size} bytes")
+            else:
+                print(f"ERROR: Save appeared successful but file doesn't exist: {save_path}")
+        except Exception as e:
+            print(f"ERROR: Failed to save model: {e}")
+            import traceback
+            print(f"ERROR: Traceback: {traceback.format_exc()}")
 
     def load(self, milestone):
         if osp.isfile(milestone):
@@ -1035,6 +1100,33 @@ class Trainer1D(object):
                 pbar.update(1)
 
         accelerator.print('training complete')
+        
+        # Verify that the final checkpoint was saved successfully
+        if accelerator.is_main_process:
+            final_milestone = self.step // self.save_and_sample_every
+            expected_checkpoint = self.results_folder / f'model-{final_milestone}.pt'
+            print(f"DEBUG: Verifying final checkpoint after training completion")
+            print(f"DEBUG: Final step: {self.step}")
+            print(f"DEBUG: Final milestone: {final_milestone}")
+            print(f"DEBUG: Expected checkpoint: {expected_checkpoint}")
+            
+            if expected_checkpoint.exists():
+                try:
+                    # Try to load the checkpoint to verify it's valid
+                    checkpoint_data = torch.load(expected_checkpoint)
+                    file_size = expected_checkpoint.stat().st_size
+                    print(f"DEBUG: ✅ Final checkpoint verified! Size: {file_size} bytes")
+                    print(f"DEBUG: ✅ Checkpoint contains step: {checkpoint_data.get('step', 'unknown')}")
+                except Exception as e:
+                    print(f"ERROR: ❌ Final checkpoint exists but appears corrupted: {e}")
+            else:
+                print(f"ERROR: ❌ Final checkpoint missing: {expected_checkpoint}")
+                # List what files do exist in the results folder
+                try:
+                    files_in_dir = list(self.results_folder.glob('*'))
+                    print(f"DEBUG: Files found in results folder: {files_in_dir}")
+                except Exception as e:
+                    print(f"ERROR: Could not list results folder contents: {e}")
 
     def evaluate(self, device, milestone, inp=None, label=None, mask=None):
         print('Running Evaluation...')
