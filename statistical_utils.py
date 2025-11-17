@@ -87,7 +87,7 @@ class StatisticalAnalyzer:
         self, 
         baseline_scores: List[float], 
         comparison_scores: List[float],
-        num_comparisons: int = 4
+        num_comparisons: int = 3
     ) -> Tuple[float, float, float]:
         """
         Perform paired t-test with Bonferroni correction for multiple comparisons
@@ -95,7 +95,7 @@ class StatisticalAnalyzer:
         Args:
             baseline_scores: IRED baseline MSE scores (5 random seeds)
             comparison_scores: Treatment condition MSE scores (5 random seeds) 
-            num_comparisons: Number of total comparisons being made (default: 4 configs)
+            num_comparisons: Number of total comparisons being made (default: 3 configs)
             
         Returns:
             (t_statistic, p_value_uncorrected, p_value_corrected)
@@ -116,7 +116,7 @@ class StatisticalAnalyzer:
         config_name: str,
         baseline_scores: List[float],
         comparison_scores: List[float], 
-        num_comparisons: int = 4
+        num_comparisons: int = 3
     ) -> StatisticalResult:
         """
         Complete statistical analysis for a single configuration
@@ -301,9 +301,8 @@ class StatisticalAnalyzer:
 
 ### Configurations Tested
 - **IRED Baseline:** Standard IRED training (reference)
-- **ANM Best:** epsilon=1.0, steps=5, distance_penalty=0.001  
-- **ANM Extreme:** epsilon=1.0, steps=1, distance_penalty=0.0
-- **Random Noise:** Pure random noise corruption (σ=1.0)
+- **ANM Best:** steps=5, distance_penalty=0.001, temperature=1.0  
+- **ANM Extreme:** steps=1, distance_penalty=0.0, temperature=1.0
 
 ### Decision Criteria (Phase 1)
 - **Statistical Significance:** p < 0.0125 (Bonferroni corrected for 4 comparisons)
@@ -335,7 +334,6 @@ def example_usage():
     baseline_scores = [0.0095, 0.0098, 0.0092, 0.0097, 0.0094]  # IRED baseline
     anm_best_scores = [0.0089, 0.0091, 0.0087, 0.0090, 0.0088]  # ANM best config
     anm_extreme_scores = [0.0094, 0.0096, 0.0093, 0.0095, 0.0092]  # ANM extreme
-    random_noise_scores = [0.0102, 0.0105, 0.0099, 0.0103, 0.0101]  # Random noise
     
     analyzer = StatisticalAnalyzer()
     
@@ -346,9 +344,6 @@ def example_usage():
     ))
     results.append(analyzer.statistical_analysis_single_config(
         "anm_extreme", baseline_scores, anm_extreme_scores  
-    ))
-    results.append(analyzer.statistical_analysis_single_config(
-        "random_noise", baseline_scores, random_noise_scores
     ))
     
     # Generate summary and decision
@@ -362,7 +357,7 @@ def example_usage():
     print(rationale)
     
     # Generate full report
-    report = analyzer.generate_phase1_report(results, "addition", 20, 8.5)
+    report = analyzer.generate_phase1_report(results, "addition", 15, 6.5)
     print("\nFull Report:")
     print(report)
 

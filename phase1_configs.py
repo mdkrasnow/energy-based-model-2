@@ -50,22 +50,32 @@ PHASE1_CONFIGURATIONS = {
         use_random_noise=False
     ),
     
-    "anm_best": Phase1Config(
+    "anm_complete": Phase1Config(
         name="anm_best", 
-        description="ANM with best-known hyperparameters from previous experiments",
+        description="ANM with complete adversarial ",
         use_anm=True,
-        anm_adversarial_steps=5,
+        anm_adversarial_steps=10,
+        anm_temperature=1.0,
+        anm_clean_ratio=0,
+        anm_adversarial_ratio=1,
+        anm_gaussian_ratio=0
+    ),
+    
+    "anm_10": Phase1Config(
+        name="anm_extreme",
+        description="ANM with 10 steps",
+        use_anm=True, 
+        anm_adversarial_steps=10, 
         anm_temperature=1.0,
         anm_clean_ratio=0.1,
         anm_adversarial_ratio=0.8,
         anm_gaussian_ratio=0.1
     ),
-    
-    "anm_extreme": Phase1Config(
+    "anm_20": Phase1Config(
         name="anm_extreme",
-        description="ANM with extreme simplification - single step",
+        description="ANM with 20 steps",
         use_anm=True, 
-        anm_adversarial_steps=1,  # Minimal steps
+        anm_adversarial_steps=20, 
         anm_temperature=1.0,
         anm_clean_ratio=0.1,
         anm_adversarial_ratio=0.8,
@@ -73,8 +83,8 @@ PHASE1_CONFIGURATIONS = {
     )
 }
 
-# Validation: Ensure exactly 3 configurations now that random noise is removed
-assert len(PHASE1_CONFIGURATIONS) == 3, f"Phase 1 requires exactly 3 configs, got {len(PHASE1_CONFIGURATIONS)}"
+# Validation: Ensure exactly 4 configurations now that random noise is removed
+assert len(PHASE1_CONFIGURATIONS) == 4, f"Phase 1 requires exactly 4 configs, got {len(PHASE1_CONFIGURATIONS)}"
 
 def get_phase1_config_names() -> List[str]:
     """Get list of all Phase 1 configuration names"""
@@ -92,12 +102,12 @@ def get_all_phase1_configs() -> List[Phase1Config]:
 
 # Phase 1 Experimental Design Parameters
 PHASE1_EXPERIMENTAL_DESIGN = {
-    "num_configs": 3,
+    "num_configs": 4,
     "seeds_per_config": 5,
-    "total_experiments": 15,  # 3 × 5 = 15 training runs
-    "train_steps_per_experiment": 1000,  # Reduced for Phase 1 speed
+    "total_experiments": 20,  # 4 × 5 = 20 training runs
+    "train_steps_per_experiment": 1000, 
     "statistical_alpha": 0.05,
-    "bonferroni_alpha": 0.0167,  # 0.05 / 3 configs
+    "bonferroni_alpha": 0.0125,  # 0.05 / 4 configs
     "effect_size_threshold": 0.3,  # Cohen's d > 0.3 (small-medium effect)
     "random_seeds": [42, 123, 456, 789, 999]  # Fixed seeds for reproducibility
 }
@@ -206,13 +216,13 @@ def validate_phase1_configs():
     print("🔍 Validating Phase 1 configurations...")
     
     # Check required configurations exist
-    required_configs = ["ired_baseline", "anm_best", "anm_extreme"]
+    required_configs = ["ired_baseline", "anm_complete", "anm_10", "anm_20"]
     for required in required_configs:
         assert required in PHASE1_CONFIGURATIONS, f"Missing required config: {required}"
     
     # Validate ANM configurations
     anm_configs = [c for c in PHASE1_CONFIGURATIONS.values() if c.use_anm]
-    assert len(anm_configs) == 2, f"Expected 2 ANM configs, got {len(anm_configs)}"
+    assert len(anm_configs) == 3, f"Expected 3 ANM configs, got {len(anm_configs)}"
     
     for config in anm_configs:
         assert config.anm_adversarial_steps is not None, f"ANM config {config.name} missing steps"

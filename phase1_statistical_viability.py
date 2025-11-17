@@ -61,7 +61,7 @@ DIFFUSION_STEPS = 10
 RANK = 20  # For 20x20 matrices
 
 # Tasks to run
-TASKS = ['addition']
+TASKS = ['inverse']
 
 class ExperimentRunner:
     def __init__(self, base_dir='experiments'):
