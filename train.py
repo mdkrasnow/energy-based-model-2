@@ -496,8 +496,27 @@ if __name__ == "__main__":
             # Add distance penalty to directory name if explicitly provided
             if FLAGS.anm_distance_penalty is not None:
                 result_dir = result_dir + f'_dp{FLAGS.anm_distance_penalty}'
+        elif FLAGS.anm_adversarial_steps is not None:
+            # Phase 1 experiments: use steps-only format
+            result_dir = result_dir + f'_anm_steps{FLAGS.anm_adversarial_steps}'
         else:
             result_dir = result_dir + '_anm_curriculum'  # Default ANM
+    
+    # Add seed suffix for Phase 1 experiments
+    # Phase 1 always expects seed suffix, including when seed=42
+    # We distinguish Phase 1 usage by checking multiple indicators:
+    # 1. ANM with explicit adversarial steps (Phase 1 ANM experiments)
+    # 2. Non-default seed (other Phase 1 experiments with different seeds)
+    # 3. Non-default train steps (Phase 1 uses 1000 steps vs default 2000)
+    print(f"DEBUG: Path construction params - seed={FLAGS.seed}, train_steps={FLAGS.train_steps}, use_anm={FLAGS.use_anm}, anm_steps={FLAGS.anm_adversarial_steps}")
+    is_phase1_experiment = (
+        (FLAGS.use_anm and FLAGS.anm_adversarial_steps is not None) or 
+        FLAGS.seed != 42 or 
+        FLAGS.train_steps != 2000
+    )
+    print(f"DEBUG: is_phase1_experiment={is_phase1_experiment}")
+    if is_phase1_experiment:
+        result_dir = result_dir + f'_seed{FLAGS.seed}'
     print(f"DEBUG: Creating results directory: {result_dir}")
     try:
         os.makedirs(result_dir, exist_ok=True)
@@ -558,4 +577,51 @@ if __name__ == "__main__":
         trainer.load(FLAGS.load_milestone)
 
     trainer.train()
+    
+    # Save training metadata for debugging and validation
+    try:
+        import json
+        import datetime
+        
+        metadata = {
+            'seed': FLAGS.seed,
+            'train_steps': FLAGS.train_steps,
+            'model_type': 'anm' if FLAGS.use_anm else 'baseline',
+            'dataset': FLAGS.dataset,
+            'diffusion_steps': FLAGS.diffusion_steps,
+            'batch_size': FLAGS.batch_size,
+            'learning_rate': FLAGS.learning_rate,
+            'rank': FLAGS.rank,
+            'timestamp': datetime.datetime.now().isoformat(),
+            'is_phase1_experiment': is_phase1_experiment
+        }
+        
+        # Add ANM-specific parameters if used
+        if FLAGS.use_anm:
+            metadata.update({
+                'anm_adversarial_steps': FLAGS.anm_adversarial_steps,
+                'anm_epsilon': getattr(FLAGS, 'anm_epsilon', None),
+                'anm_temperature': getattr(FLAGS, 'anm_temperature', None),
+                'anm_clean_ratio': getattr(FLAGS, 'anm_clean_ratio', None),
+                'anm_adversarial_ratio': getattr(FLAGS, 'anm_adversarial_ratio', None),
+                'anm_gaussian_ratio': getattr(FLAGS, 'anm_gaussian_ratio', None)
+            })
+        
+        # Try to get git commit info
+        try:
+            import subprocess
+            git_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], 
+                                               stderr=subprocess.DEVNULL).decode().strip()
+            metadata['git_commit'] = git_commit
+        except:
+            pass  # Git info optional
+        
+        metadata_path = os.path.join(result_dir, 'metadata.json')
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print(f"DEBUG: Training metadata saved to: {metadata_path}")
+        
+    except Exception as e:
+        print(f"WARNING: Failed to save training metadata: {e}")
+        # Don't fail training if metadata saving fails
 

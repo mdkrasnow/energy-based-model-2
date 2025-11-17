@@ -27,6 +27,7 @@ from pathlib import Path
 import time
 import re
 import torch
+import glob
 import torch.nn.functional as F
 import numpy as np
 import matplotlib
@@ -49,11 +50,6 @@ from phase1_configs import (
     get_all_phase1_configs,
     generate_experiment_matrix,
     validate_phase1_configs
-)
-from random_noise_baseline import (
-    random_noise_baseline_corruption,
-    patch_diffusion_for_random_noise,
-    PHASE1_RANDOM_NOISE_CONFIGS
 )
 
 
@@ -405,7 +401,7 @@ class ExperimentRunner:
         actual_train_steps = train_steps if train_steps is not None else TRAIN_ITERATIONS
         
         # Check if model already exists
-        if not force_retrain and os.path.exists(f'{result_dir}/model-20.pt'):
+        if not force_retrain and os.path.exists(f'{result_dir}/model-1.pt'):
             print(f"\n{'='*80}")
             print(f"Model for {dataset} ({model_type}) already exists. Skipping training.")
             print(f"Use --force to retrain.")
@@ -455,6 +451,10 @@ class ExperimentRunner:
             '--rank', str(RANK),
             '--train-steps', str(actual_train_steps),
         ]
+        
+        # Add seed for reproducible Phase 1 experiments
+        if seed is not None:
+            cmd.extend(['--seed', str(seed)])
         
         # Add model-specific parameters
         if model_type == 'anm':
@@ -583,7 +583,7 @@ class ExperimentRunner:
         
         # Train baseline once if needed
         baseline_dir = self.get_result_dir(dataset, 'baseline')
-        if not os.path.exists(f'{baseline_dir}/model-20.pt') or force_retrain:
+        if not os.path.exists(f'{baseline_dir}/model-1.pt') or force_retrain:
             print("Training baseline model first...")
             self.train_model(dataset, 'baseline', force_retrain, train_steps=train_steps)
         
@@ -685,7 +685,7 @@ class ExperimentRunner:
         result_dir = self.get_result_dir(dataset, 'anm', adv_steps, seed)
         actual_train_steps = train_steps if train_steps is not None else TRAIN_ITERATIONS
         
-        if not os.path.exists(f'{result_dir}/model-20.pt'):
+        if not os.path.exists(f'{result_dir}/model-1.pt'):
             return None
         
         cmd = [
@@ -833,12 +833,40 @@ class ExperimentRunner:
         """Evaluate a trained model on same or harder difficulty"""
         result_dir = self.get_result_dir(dataset, model_type, seed=seed)
         
-        # Check if model exists
-        if not os.path.exists(f'{result_dir}/model-20.pt'):
+        # Enhanced fail-fast validation with actionable error messages
+        expected_model_path = f'{result_dir}/model-1.pt'
+        if not os.path.exists(expected_model_path):
             print(f"\n{'='*80}")
             print(f"ERROR: No trained model found for {dataset} ({model_type})")
-            print(f"Expected location: {result_dir}/model-20.pt")
-            print(f"Please train the model first.")
+            print(f"Expected location: {expected_model_path}")
+            
+            # Scan for similar model paths to help debug
+            results_base = os.path.dirname(result_dir)
+            if os.path.exists(results_base):
+                similar_paths = glob.glob(f'{results_base}/*/model-1.pt')
+                if similar_paths:
+                    print(f"\nSimilar models found:")
+                    for path in similar_paths[:5]:  # Show max 5 to avoid clutter
+                        rel_path = os.path.relpath(path, results_base)
+                        print(f"  • {rel_path}")
+                    
+                    print(f"\nLikely issues to check:")
+                    print(f"  - Verify --seed parameter matches training (current: seed={seed})")
+                    print(f"  - Check if model_type matches training (current: {model_type})")
+                    print(f"  - Ensure same --train-steps used for training")
+                else:
+                    print(f"\nNo model checkpoints found in {results_base}")
+                    print(f"You may need to train the model first:")
+                    if model_type == 'baseline':
+                        print(f"  python train.py --dataset {dataset} --train-steps 1000" + 
+                              (f" --seed {seed}" if seed is not None else ""))
+                    else:
+                        print(f"  python train.py --dataset {dataset} --use-anm --train-steps 1000" +
+                              (f" --seed {seed}" if seed is not None else ""))
+            else:
+                print(f"\nResults directory does not exist: {results_base}")
+                print(f"No models have been trained for dataset '{dataset}' yet.")
+            
             print(f"{'='*80}\n")
             sys.stdout.flush()
             return None
@@ -861,6 +889,10 @@ class ExperimentRunner:
             '--load-milestone', '1',
             '--evaluate',
         ]
+        
+        # Add seed for reproducible Phase 1 experiments (matches train_model pattern)
+        if seed is not None:
+            cmd.extend(['--seed', str(seed)])
         
         # Add model-specific parameters for evaluation
         if model_type == 'anm':
@@ -1354,7 +1386,7 @@ class ExperimentRunner:
             
             print("\n  INTERPRETATION:")
             if mean_anm < mean_gaussian:
-                print("  ⚠️  ANM samples have LOWER energy than random noise!")
+                print("  ⚠️  ANM samples have LOWER energy than gaussian noise!")
                 print("     This indicates a serious problem with the adversarial process.")
             elif mean_anm < mean_ired * 1.05:
                 print("  ⚠️  ANM barely improves over standard IRED.")
@@ -1371,7 +1403,7 @@ class Phase1ExperimentRunner(ExperimentRunner):
     Extended ExperimentRunner for Phase 1 Statistical Viability Testing
     
     Implements the complete Phase 1 workflow:
-    - 4 configurations × 5 seeds = 20 experiments
+    - 3 configurations × 5 seeds = 15 experiments
     - Statistical analysis with Bonferroni correction
     - Go/no-go decision based on p-values and effect sizes
     - CSV logging for experiment tracking
@@ -1396,8 +1428,7 @@ class Phase1ExperimentRunner(ExperimentRunner):
                 'timestamp', 'experiment_id', 'config_name', 'dataset', 'seed', 
                 'train_steps', 'mse_same_difficulty', 'mse_harder_difficulty',
                 'training_time_minutes', 'model_path', 'success',
-                'anm_adversarial_steps',
-                'random_noise_scale', 'random_noise_type'
+                'anm_adversarial_steps'
             ]
             
             with open(self.csv_log_path, 'w') as f:
@@ -1423,9 +1454,7 @@ class Phase1ExperimentRunner(ExperimentRunner):
                               config.anm_adversarial_steps if config.use_anm else None,
                               experiment_spec['seed']),
             'success' if success else 'failed',
-            config.anm_adversarial_steps if config.use_anm else '',
-            config.random_noise_scale if config.use_random_noise else '',
-            config.random_noise_type if config.use_random_noise else ''
+            config.anm_adversarial_steps if config.use_anm else ''
         ]
         
         with open(self.csv_log_path, 'a') as f:
@@ -1459,27 +1488,19 @@ class Phase1ExperimentRunner(ExperimentRunner):
         if config.use_anm:
             print(f"ANM parameters:")
             print(f"  • Adversarial steps: {config.anm_adversarial_steps}")
-        elif config.use_random_noise:
-            print(f"Random noise parameters:")
-            print(f"  • Noise type: {config.random_noise_type}")
-            print(f"  • Noise scale: {config.random_noise_scale}")
         
         print(f"{'='*80}\n")
         sys.stdout.flush()
         
-        # Handle random noise baseline specially
-        if config.use_random_noise:
-            success = self._train_random_noise_baseline(dataset, config, seed, force_retrain)
-        else:
-            # Use existing train_model method with appropriate parameters
-            success = self.train_model(
-                dataset=dataset,
-                model_type='anm' if config.use_anm else 'baseline',
-                force_retrain=force_retrain,
-                adv_steps=config.anm_adversarial_steps if config.use_anm else None,
-                train_steps=PHASE1_EXPERIMENTAL_DESIGN['train_steps_per_experiment'],
-                seed=seed
-            )
+        # Use existing train_model method with appropriate parameters
+        success = self.train_model(
+            dataset=dataset,
+            model_type='anm' if config.use_anm else 'baseline',
+            force_retrain=force_retrain,
+            adv_steps=config.anm_adversarial_steps if config.use_anm else None,
+            train_steps=PHASE1_EXPERIMENTAL_DESIGN['train_steps_per_experiment'],
+            seed=seed
+        )
         
         training_time_minutes = (time.time() - start_time) / 60
         
@@ -1498,33 +1519,16 @@ class Phase1ExperimentRunner(ExperimentRunner):
                 'mse_harder': mse_harder
             }
             
-            print(f"  MSE (same difficulty): {mse_same:.6f}")
-            print(f"  MSE (harder difficulty): {mse_harder:.6f}")
+            print(f"  MSE (same difficulty): {mse_same:.6f}" if mse_same is not None else "  MSE (same difficulty): N/A")
+            print(f"  MSE (harder difficulty): {mse_harder:.6f}" if mse_harder is not None else "  MSE (harder difficulty): N/A")
         else:
             print(f"\n❌ Training failed after {training_time_minutes:.1f} minutes")
         
         return success, training_time_minutes, results
     
-    def _train_random_noise_baseline(self, dataset, config, seed, force_retrain=False):
-        """Train model with random noise baseline (requires special handling)"""
-        # For now, implement this as a placeholder that logs the attempt
-        # In a full implementation, this would modify the training pipeline
-        # to use random noise corruption instead of adversarial corruption
-        
-        print("⚠️  Random noise baseline training not yet implemented in train.py")
-        print("   This would require modifying the training pipeline to support")
-        print("   --use-random-noise-baseline flag and integration with")
-        print("   random_noise_baseline.py")
-        print("   For Phase 1 proof-of-concept, skipping random noise experiments.")
-        
-        return False  # Mark as failed for now
     
     def _evaluate_phase1_model(self, dataset, config, seed, ood=False):
         """Evaluate a Phase 1 model and return MSE"""
-        if config.use_random_noise:
-            # Random noise baseline evaluation not implemented yet
-            return None
-            
         # Use existing evaluation method
         if config.use_anm:
             return self.evaluate_model_with_config(
@@ -1541,7 +1545,7 @@ class Phase1ExperimentRunner(ExperimentRunner):
         """
         Main Phase 1 orchestration: Statistical viability testing
         
-        Runs 4 configurations × 5 seeds = 20 experiments with statistical analysis
+        Runs 3 configurations × 5 seeds = 15 experiments with statistical analysis
         
         Args:
             dataset: Dataset name (default: 'addition')  
@@ -1717,7 +1721,7 @@ if __name__ == "__main__":
     if args.phase1:
         print("🚀 Starting Phase 1 Statistical Viability Testing")
         print("   This implements the optimal ANM algorithm from the final synthesis")
-        print("   4 configurations × 5 seeds = 20 experiments with rigorous statistics\n")
+        print("   3 configurations × 5 seeds = 15 experiments with rigorous statistics\n")
         
         runner = Phase1ExperimentRunner(base_dir=base_dir)
         

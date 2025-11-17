@@ -105,7 +105,6 @@ def _adversarial_corruption(
     mask: Optional[torch.Tensor],
     data_cond: Optional[torch.Tensor],
     base_noise_scale: float,
-    epsilon: float,
     project: bool = True,
 ) -> torch.Tensor:
     noise = torch.randn_like(x_start)

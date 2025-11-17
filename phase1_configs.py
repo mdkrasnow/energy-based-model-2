@@ -1,7 +1,6 @@
 # File: /Users/mkrasnow/Desktop/energy-based-model-2/phase1_configs.py
 # Phase 1 Statistical Viability Configuration Definitions
 # Defines the 4 critical configurations for testing ANM effectiveness
-
 from typing import Dict, Any, List, NamedTuple
 from dataclasses import dataclass
 
@@ -33,22 +32,12 @@ class Phase1Config:
                 '--anm-adversarial-ratio', str(self.anm_adversarial_ratio),
                 '--anm-gaussian-ratio', str(self.anm_gaussian_ratio)
             ])
-        elif self.use_random_noise:
-            # For random noise, we'll need to modify the training to use random corruption
-            args.extend([
-                '--use-random-noise-baseline',
-                '--random-noise-scale', str(self.random_noise_scale),
-                '--random-noise-type', self.random_noise_type
-            ])
-        
         return args
     
     def get_result_suffix(self) -> str:
         """Get unique suffix for result directory naming"""
         if self.use_anm:
             return f"anm_steps{self.anm_adversarial_steps}"
-        elif self.use_random_noise:
-            return f"randomnoise_{self.random_noise_type}_scale{self.random_noise_scale}"
         else:
             return "baseline"
 
@@ -81,20 +70,11 @@ PHASE1_CONFIGURATIONS = {
         anm_clean_ratio=0.1,
         anm_adversarial_ratio=0.8,
         anm_gaussian_ratio=0.1
-    ),
-    
-    "random_noise": Phase1Config(
-        name="random_noise",
-        description="Pure random noise corruption baseline (critical control)",
-        use_anm=False,
-        use_random_noise=True,
-        random_noise_scale=1.0,  # Strong noise to test upper bound
-        random_noise_type="gaussian"
     )
 }
 
-# Validation: Ensure exactly 4 configurations for statistical power
-assert len(PHASE1_CONFIGURATIONS) == 4, f"Phase 1 requires exactly 4 configs, got {len(PHASE1_CONFIGURATIONS)}"
+# Validation: Ensure exactly 3 configurations now that random noise is removed
+assert len(PHASE1_CONFIGURATIONS) == 3, f"Phase 1 requires exactly 3 configs, got {len(PHASE1_CONFIGURATIONS)}"
 
 def get_phase1_config_names() -> List[str]:
     """Get list of all Phase 1 configuration names"""
@@ -112,12 +92,12 @@ def get_all_phase1_configs() -> List[Phase1Config]:
 
 # Phase 1 Experimental Design Parameters
 PHASE1_EXPERIMENTAL_DESIGN = {
-    "num_configs": 4,
+    "num_configs": 3,
     "seeds_per_config": 5,
-    "total_experiments": 20,  # 4 × 5 = 20 training runs
+    "total_experiments": 15,  # 3 × 5 = 15 training runs
     "train_steps_per_experiment": 1000,  # Reduced for Phase 1 speed
     "statistical_alpha": 0.05,
-    "bonferroni_alpha": 0.0125,  # 0.05 / 4 configs
+    "bonferroni_alpha": 0.0167,  # 0.05 / 3 configs
     "effect_size_threshold": 0.3,  # Cohen's d > 0.3 (small-medium effect)
     "random_seeds": [42, 123, 456, 789, 999]  # Fixed seeds for reproducibility
 }
@@ -177,11 +157,6 @@ PHASE1_CONFIG_RATIONALE = {
         "purpose": "Test minimal ANM to isolate core mechanism",
         "expectation": "Pure energy maximization with minimal computational cost",
         "critical_finding": "If this succeeds, single-step ANM is sufficient"
-    },
-    "random_noise": {
-        "purpose": "Critical sanity check against unstructured corruption",
-        "expectation": "Should perform worse than any meaningful approach",
-        "critical_finding": "If ANM ≈ random noise, ANM is fundamentally flawed"
     }
 }
 
@@ -204,8 +179,6 @@ def print_phase1_experimental_design():
         print(f"  {i}. {config.name.upper()}: {config.description}")
         if config.use_anm:
             print(f"     → steps={config.anm_adversarial_steps}")
-        elif config.use_random_noise:
-            print(f"     → {config.random_noise_type} noise, scale={config.random_noise_scale}")
         print()
     
     print("📈 STATISTICAL CRITERIA:")
@@ -233,7 +206,7 @@ def validate_phase1_configs():
     print("🔍 Validating Phase 1 configurations...")
     
     # Check required configurations exist
-    required_configs = ["ired_baseline", "anm_best", "anm_extreme", "random_noise"]
+    required_configs = ["ired_baseline", "anm_best", "anm_extreme"]
     for required in required_configs:
         assert required in PHASE1_CONFIGURATIONS, f"Missing required config: {required}"
     
@@ -249,12 +222,6 @@ def validate_phase1_configs():
     assert not baseline.use_anm, "Baseline config should not use ANM"
     assert not baseline.use_random_noise, "Baseline config should not use random noise"
     
-    # Validate random noise configuration
-    noise_config = PHASE1_CONFIGURATIONS["random_noise"]
-    assert noise_config.use_random_noise, "Random noise config should use random noise"
-    assert not noise_config.use_anm, "Random noise config should not use ANM"
-    assert noise_config.random_noise_scale is not None, "Random noise config missing scale"
-    
     print("✓ All Phase 1 configurations validated successfully")
 
 if __name__ == "__main__":
@@ -268,4 +235,4 @@ if __name__ == "__main__":
         print(f"  • {exp['experiment_id']}: {exp['config'].description}")
     print(f"  ... and {len(experiments) - 8} more experiments")
     print()
-    print(f"✓ Phase 1 configuration system ready for execution")
+    print(f"✓ Phase 1 configuration system ready for execution (random noise removed)")
