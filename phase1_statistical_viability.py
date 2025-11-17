@@ -3,7 +3,7 @@
 #   - Added run_hyperparameter_sweep() method to test 9 ANM configurations
 #   - Added evaluate_model_with_config() for evaluating specific hyperparameter configs  
 #   - Added _print_sweep_summary() and _save_sweep_results() for analysis
-#   - Modified get_result_dir() to support epsilon/adv_steps specific directories
+#   - Modified get_result_dir() to support adv_steps specific directories
 #   - Modified train_model() to accept custom hyperparameters
 #   - Added --sweep, --dataset CLI arguments to enable sweep mode
 #   - Sweep tests specific configurations targeting different energy bands
@@ -63,7 +63,6 @@ LEARNING_RATE = 1e-4
 TRAIN_ITERATIONS = 1000  
 DIFFUSION_STEPS = 10
 RANK = 20  # For 20x20 matrices
-DISTANCE_PENALTY = 0.001
 
 # Tasks to run
 TASKS = ['addition']
@@ -101,16 +100,19 @@ class ExperimentRunner:
             'y': torch.stack(y_list).float()
         }
         
-    def get_result_dir(self, dataset, model_type='baseline', epsilon=None, adv_steps=None, distance_penalty=None):
+    def get_result_dir(self, dataset, model_type='baseline', adv_steps=None, seed=None):
         """Get the results directory for a given dataset and model type"""
         base = f'results/ds_{dataset}/model_mlp_diffsteps_{DIFFUSION_STEPS}'
         if model_type == 'anm':
-            if epsilon is not None and adv_steps is not None:
-                base += f'_anm_eps{epsilon}_steps{adv_steps}'
-                if distance_penalty is not None:
-                    base += f'_dp{distance_penalty}'
+            if adv_steps is not None:
+                base += f'_anm_steps{adv_steps}'
             else:
                 base += '_anm_curriculum'  # Default ANM
+        
+        # Add seed suffix for Phase 1 experiments to ensure unique training directories
+        if seed is not None:
+            base += f'_seed{seed}'
+        
         return base
 
     def load_model_for_diagnostics(self, model_dir, device='cuda', train_steps=None):
@@ -231,15 +233,11 @@ class ExperimentRunner:
         
         # Try to extract ANM parameters from model directory name (if specific config was used)
         anm_adversarial_steps = 5  # Default
-        anm_distance_penalty = 0.1  # Default
         
-        if "_anm_eps" in str(model_dir) and "_steps" in str(model_dir):
-            # Extract parameters from directory name like "_anm_eps0.3_steps20"
+        if "_anm_steps" in str(model_dir):
+            # Extract parameters from directory name like "_anm_steps20"
             import re
-            eps_match = re.search(r'_anm_eps([\d.]+)', str(model_dir))
-            steps_match = re.search(r'_steps(\d+)', str(model_dir))
-            if eps_match:
-                anm_distance_penalty = float(eps_match.group(1))
+            steps_match = re.search(r'_anm_steps(\d+)', str(model_dir))
             if steps_match:
                 anm_adversarial_steps = int(steps_match.group(1))
         
@@ -255,7 +253,6 @@ class ExperimentRunner:
             # Add ANM parameters to match training configuration
             use_adversarial_corruption=True,
             anm_adversarial_steps=anm_adversarial_steps,
-            anm_distance_penalty=anm_distance_penalty,
             anm_warmup_steps=0,  # Not relevant for diagnostics
             sudoku=False,  # Required by DiffusionOps protocol
             shortest_path=False,  # Required by DiffusionOps protocol
@@ -318,13 +315,12 @@ class ExperimentRunner:
         
         return energies
 
-    def _simulate_anm_output(self, x_clean, y_clean, t, diffusion, num_steps=5, eps=0.1):
+    def _simulate_anm_output(self, x_clean, y_clean, t, diffusion, num_steps=5):
         """Use actual ANM adversarial corruption instead of simulation"""
         
         # Use the actual adversarial corruption with real parameters
         # Extract real training parameters from diffusion object
         anm_adversarial_steps = getattr(diffusion, 'anm_adversarial_steps', num_steps)
-        anm_distance_penalty = getattr(diffusion, 'anm_distance_penalty', eps)
         
         # Data scale check - only print once per batch
         if not hasattr(self, '_data_scale_printed'):
@@ -333,8 +329,6 @@ class ExperimentRunner:
             print(f"Clean output norm: {y_clean.norm(dim=-1).mean().item():.6f}")
             print(f"Clean output range: {y_clean.min().item():.6f} to {y_clean.max().item():.6f}")
             print(f"ANM adversarial steps: {anm_adversarial_steps}")
-            print(f"ANM distance penalty (epsilon): {anm_distance_penalty}")
-            print(f"Relative distance penalty: {anm_distance_penalty / y_clean.norm(dim=-1).mean().item():.3f} of mean norm")
             print("=" * 60)
             self._data_scale_printed = True
         
@@ -347,8 +341,7 @@ class ExperimentRunner:
             t=t,
             mask=None,  # No masking in diagnostic context
             data_cond=None,  # No conditioning in diagnostic context
-            base_noise_scale=3.0,  # Standard base noise scale
-            epsilon=anm_distance_penalty
+            base_noise_scale=3.0  # Standard base noise scale
         )
 
     def run_comparative_diagnostics(self, baseline_dir, anm_dir, dataset='addition', config_name='default'):
@@ -397,19 +390,18 @@ class ExperimentRunner:
         }
     
     def train_model(self, dataset, model_type='baseline', force_retrain=False, 
-                   epsilon=None, adv_steps=None, train_steps=None, distance_penalty=None):
+                   adv_steps=None, train_steps=None, seed=None):
         """Train a model for a specific dataset and model type
         
         Args:
             dataset: Dataset name
             model_type: One of 'baseline', 'anm' (which always uses curriculum)
             force_retrain: Force retraining even if model exists
-            epsilon: ANM epsilon override (for hyperparameter search)
             adv_steps: ANM adversarial steps override (for hyperparameter search)
             train_steps: Training steps override (default: TRAIN_ITERATIONS)
-            distance_penalty: ANM distance penalty override (for hyperparameter search)
+            seed: Random seed for Phase 1 experiments (creates unique directories)
         """
-        result_dir = self.get_result_dir(dataset, model_type, epsilon, adv_steps, distance_penalty)
+        result_dir = self.get_result_dir(dataset, model_type, adv_steps, seed)
         actual_train_steps = train_steps if train_steps is not None else TRAIN_ITERATIONS
         
         # Check if model already exists
@@ -433,8 +425,8 @@ class ExperimentRunner:
         print(f"Training IRED ({model_type.upper()}) on {dataset.upper()} task")
         print(f"{'='*80}")
         print(f"Model Type: {model_type}")
-        if epsilon is not None and adv_steps is not None:
-            print(f"ANM Hyperparameters: epsilon={epsilon}, adversarial_steps={adv_steps}")
+        if adv_steps is not None:
+            print(f"ANM Hyperparameters: adversarial_steps={adv_steps}")
         print(f"Batch size: {BATCH_SIZE}")
         print(f"Learning rate: {LEARNING_RATE}")
         print(f"Training iterations: {actual_train_steps}")
@@ -444,11 +436,11 @@ class ExperimentRunner:
         
         if model_type == 'anm':
             print(f"\nANM with AGGRESSIVE Curriculum Schedule (% of {TRAIN_ITERATIONS} steps):")
-            print(f"  Warmup (0-10%): 100% clean, 0% adversarial, ε=0.0")
-            print(f"  Rapid Introduction (10-25%): 50% clean, 40% adversarial, 10% gaussian, ε=0.3")
-            print(f"  Aggressive Ramp (25-50%): 20% clean, 70% adversarial, 10% gaussian, ε=0.7")
-            print(f"  High Intensity (50-80%): 10% clean, 85% adversarial, 5% gaussian, ε=1.0")
-            print(f"  Extreme Hardening (80-100%): 5% clean, 90% adversarial, 5% gaussian, ε=1.2")
+            print(f"  Warmup (0-10%): 100% clean, 0% adversarial")
+            print(f"  Rapid Introduction (10-25%): 50% clean, 40% adversarial, 10% gaussian")
+            print(f"  Aggressive Ramp (25-50%): 20% clean, 70% adversarial, 10% gaussian")
+            print(f"  High Intensity (50-80%): 10% clean, 85% adversarial, 5% gaussian")
+            print(f"  Extreme Hardening (80-100%): 5% clean, 90% adversarial, 5% gaussian")
             
         print(f"{'='*80}\n")
         sys.stdout.flush()
@@ -468,14 +460,10 @@ class ExperimentRunner:
         if model_type == 'anm':
             # Use custom hyperparameters if provided
             anm_adv_steps = adv_steps if adv_steps is not None else 5
-            anm_epsilon = epsilon if epsilon is not None else 0.1
-            anm_distance_penalty = distance_penalty if distance_penalty is not None else DISTANCE_PENALTY
             
             cmd.extend([
                 '--use-anm',
                 '--anm-adversarial-steps', str(anm_adv_steps),
-                '--anm-epsilon', str(anm_epsilon),
-                '--anm-distance-penalty', str(anm_distance_penalty),
                 '--anm-temperature', '1.0',
                 '--anm-clean-ratio', '0.1',
                 '--anm-adversarial-ratio', '0.8',
@@ -562,44 +550,29 @@ class ExperimentRunner:
             print("  " + "="*50 + "\n")
     
     def run_hyperparameter_sweep(self, dataset='addition', force_retrain=False):
-        """Run systematic hyperparameter sweep for ANM"""
+        """Run systematic hyperparameter sweep for ANM adversarial steps"""
         
-        # Define specific configurations to test
-        # Very negative energy (hard negatives)
-        very_negative_configs = [
-            {'target_band': -100, 'epsilon': 0.9, 'adv_steps': 135, 'distance_penalty': 0.040},
-            {'target_band': -80, 'epsilon': 0.1, 'adv_steps': 125, 'distance_penalty': 0.010},
-            {'target_band': -60, 'epsilon': 0.3, 'adv_steps': 95, 'distance_penalty': 0.003},
-            {'target_band': -40, 'epsilon': 0.4, 'adv_steps': 80, 'distance_penalty': 0.005},
-            {'target_band': -20, 'epsilon': 0.5, 'adv_steps': 65, 'distance_penalty': 0.0075},
+        # Define adversarial steps configurations to test
+        # Since epsilon and distance_penalty are no longer used, focus on adversarial steps
+        adv_steps_configs = [
+            {'name': 'low_steps', 'adv_steps': 5},
+            {'name': 'med_low_steps', 'adv_steps': 15}, 
+            {'name': 'medium_steps', 'adv_steps': 25},
+            {'name': 'med_high_steps', 'adv_steps': 45},
+            {'name': 'high_steps', 'adv_steps': 65},
+            {'name': 'very_high_steps', 'adv_steps': 95},
+            {'name': 'extreme_steps', 'adv_steps': 135},
         ]
         
-        # Mid-point / near zero
-        midpoint_configs = [
-            {'target_band': 0, 'epsilon': 0.2, 'adv_steps': 15, 'distance_penalty': 0.010},
-        ]
-        
-        # Very positive energy (diverse high-energy positives)
-        positive_configs = [
-            {'target_band': 20, 'epsilon': 0.1, 'adv_steps': 55, 'distance_penalty': 0.040},
-            {'target_band': 40, 'epsilon': 1.0, 'adv_steps': 45, 'distance_penalty': 0.015},
-            {'target_band': 60, 'epsilon': 1.0, 'adv_steps': 25, 'distance_penalty': 0.002},
-            {'target_band': 80, 'epsilon': 1.0, 'adv_steps': 5, 'distance_penalty': 0.001},
-        ]
-        
-        # Combine all configurations
-        all_configs = very_negative_configs + midpoint_configs + positive_configs
+        all_configs = adv_steps_configs
         train_steps = TRAIN_ITERATIONS
         
         print(f"\n{'#'*80}")
-        print(f"# HYPERPARAMETER SWEEP FOR ANM - SPECIFIC CONFIGURATIONS")
+        print(f"# HYPERPARAMETER SWEEP FOR ANM - ADVERSARIAL STEPS")
         print(f"# Dataset: {dataset}")
         print(f"# Training steps: {train_steps} (~12 min each)")
         print(f"# Total configs: {len(all_configs)}")
-        print(f"# Configuration types:")
-        print(f"#   - Very negative energy (hard negatives): {len(very_negative_configs)} configs")
-        print(f"#   - Mid-point / near zero: {len(midpoint_configs)} configs")
-        print(f"#   - Very positive energy (diverse positives): {len(positive_configs)} configs")
+        print(f"# Testing adversarial steps: {[c['adv_steps'] for c in all_configs]}")
         print(f"# Fixed parameters:")
         print(f"#   - Learning rate: {LEARNING_RATE}")
         print(f"#   - Temperature: 1.0")
@@ -625,9 +598,7 @@ class ExperimentRunner:
         # Store baseline entry at the top of sweep_results
         sweep_results = [{
             'config': 'baseline',                 # sentinel config id
-            'epsilon': None,
             'adv_steps': None,
-            'distance_penalty': None,
             'energy_gap_percent': None,           # not applicable
             'energy_ratio': None,                 # not applicable
             'mse_same': baseline_mse_same,
@@ -644,15 +615,11 @@ class ExperimentRunner:
         for config in all_configs:
             config_num += 1
             # Extract parameters from config
-            epsilon = config['epsilon']
+            config_name = config['name']
             adv_steps = config['adv_steps']
-            distance_penalty = config['distance_penalty']
-            target_band = config['target_band']
-            
-            config_name = f"target{target_band:+d}_eps{epsilon}_steps{adv_steps}_dp{distance_penalty}"
             
             print(f"\n{'='*80}")
-            print(f"CONFIG {config_num}/{total_configs}: target_band={target_band:+d}%, epsilon={epsilon}, adversarial_steps={adv_steps}, distance_penalty={distance_penalty}")
+            print(f"CONFIG {config_num}/{total_configs}: {config_name}, adversarial_steps={adv_steps}")
             print(f"{'='*80}")
             
             # Train model with these hyperparameters
@@ -660,15 +627,13 @@ class ExperimentRunner:
                 dataset, 
                 model_type='anm',
                 force_retrain=force_retrain,
-                epsilon=epsilon,
                 adv_steps=adv_steps,
-                train_steps=train_steps,
-                distance_penalty=distance_penalty
+                train_steps=train_steps
             )
             
             if success:
                 # Run diagnostics
-                anm_dir = self.get_result_dir(dataset, 'anm', epsilon, adv_steps, distance_penalty)
+                anm_dir = self.get_result_dir(dataset, 'anm', adv_steps)
                 
                 # Energy diagnostics
                 energies = self.run_energy_diagnostics(anm_dir, dataset)
@@ -680,18 +645,16 @@ class ExperimentRunner:
                 
                 # Evaluate on test set
                 mse_same = self.evaluate_model_with_config(
-                    dataset, epsilon, adv_steps, ood=False, train_steps=train_steps, distance_penalty=distance_penalty
+                    dataset, adv_steps, ood=False, train_steps=train_steps
                 )
                 mse_harder = self.evaluate_model_with_config(
-                    dataset, epsilon, adv_steps, ood=True, train_steps=train_steps, distance_penalty=distance_penalty
+                    dataset, adv_steps, ood=True, train_steps=train_steps
                 )
                 
                 # Store results
                 result = {
                     'config': config_name,
-                    'epsilon': epsilon,
                     'adv_steps': adv_steps,
-                    'distance_penalty': distance_penalty,
                     'energy_gap_percent': comp_result['energy_gap_percent'] if comp_result else None,
                     'energy_ratio': comp_result['energy_ratio'] if comp_result else None,
                     'mse_same': mse_same,
@@ -717,9 +680,9 @@ class ExperimentRunner:
         
         return sweep_results
     
-    def evaluate_model_with_config(self, dataset, epsilon, adv_steps, ood=False, train_steps=None, distance_penalty=None):
+    def evaluate_model_with_config(self, dataset, adv_steps, ood=False, train_steps=None, seed=None):
         """Evaluate a model trained with specific hyperparameters"""
-        result_dir = self.get_result_dir(dataset, 'anm', epsilon, adv_steps, distance_penalty)
+        result_dir = self.get_result_dir(dataset, 'anm', adv_steps, seed)
         actual_train_steps = train_steps if train_steps is not None else TRAIN_ITERATIONS
         
         if not os.path.exists(f'{result_dir}/model-20.pt'):
@@ -737,8 +700,6 @@ class ExperimentRunner:
             '--evaluate',
             '--use-anm',
             '--anm-adversarial-steps', str(adv_steps),
-            '--anm-epsilon', str(epsilon),
-            '--anm-distance-penalty', str(distance_penalty if distance_penalty is not None else DISTANCE_PENALTY),
         ]
         
         if ood:
@@ -779,15 +740,15 @@ class ExperimentRunner:
         # Sort by energy gap (descending)
         sorted_results = sorted(sweep_results, key=lambda x: x['energy_gap_percent'] or -999, reverse=True)
         
-        print(f"{'Config':<20s} {'Epsilon':>8s} {'Steps':>6s} {'Dist Pen':>10s} {'Energy Gap':>12s} {'MSE (same)':>12s} {'MSE (harder)':>13s} {'Status':>10s}")
-        print("-" * 115)
+        print(f"{'Config':<20s} {'Steps':>6s} {'Energy Gap':>12s} {'MSE (same)':>12s} {'MSE (harder)':>13s} {'Status':>10s}")
+        print("-" * 85)
         
         # Print Baseline row first (if present)
         baseline = next((r for r in sweep_results if r.get('config') == 'baseline'), None)
         if baseline is not None:
             mse_same_str = f"{baseline['mse_same']:.4f}" if baseline['mse_same'] is not None else "N/A"
             mse_harder_str = f"{baseline['mse_harder']:.4f}" if baseline['mse_harder'] is not None else "N/A"
-            print(f"{'BASELINE (IRED)':<20s} {'-':>8s} {'-':>6s} {'-':>10s} {'-':>12s} {mse_same_str:>12s} {mse_harder_str:>13s} {'REF':>10s}")
+            print(f"{'BASELINE (IRED)':<20s} {'-':>6s} {'-':>12s} {mse_same_str:>12s} {mse_harder_str:>13s} {'REF':>10s}")
         
         # Then print ANM configs sorted by energy gap
         for r in [rr for rr in sorted_results if rr.get('config') != 'baseline']:
@@ -808,8 +769,7 @@ class ExperimentRunner:
             else:
                 status = "✓ GOOD"
             
-            dp_str = f"{r.get('distance_penalty', 'N/A'):>10}" if 'distance_penalty' in r else 'N/A'
-            print(f"{r['config']:<20s} {r['epsilon']:>8.1f} {r['adv_steps']:>6d} {dp_str:>10s} {gap_str:>12s} {mse_same_str:>12s} {mse_harder_str:>13s} {status:>10s}")
+            print(f"{r['config']:<20s} {r['adv_steps']:>6d} {gap_str:>12s} {mse_same_str:>12s} {mse_harder_str:>13s} {status:>10s}")
         
         # Highlight best configs
         print(f"\n{'='*80}")
@@ -822,23 +782,21 @@ class ExperimentRunner:
         if good_configs:
             print("\n✓ GOOD CONFIGURATIONS (energy gap 5-20%):")
             for r in good_configs[:3]:  # Top 3
-                dp = r.get('distance_penalty', DISTANCE_PENALTY)
-                print(f"  {r['config']}: epsilon={r['epsilon']}, steps={r['adv_steps']}, distance_penalty={dp}")
+                print(f"  {r['config']}: steps={r['adv_steps']}")
                 print(f"    Energy gap: {r['energy_gap_percent']:+.1f}%")
                 if r['mse_harder']:
                     print(f"    Test MSE: {r['mse_harder']:.4f}")
             
             print("\n→ Run these configs at 50k steps to validate:")
             for r in good_configs[:2]:  # Top 2
-                dp = r.get('distance_penalty', DISTANCE_PENALTY)
-                print(f"   python train.py --use-anm --anm-epsilon {r['epsilon']} --anm-adversarial-steps {r['adv_steps']} --anm-distance-penalty {dp} --train-steps 50000")
+                print(f"   python train.py --use-anm --anm-adversarial-steps {r['adv_steps']} --train-steps 50000")
         else:
             print("\n❌ NO GOOD CONFIGURATIONS FOUND")
             print("   All configs have either too weak (<5%) or too strong (>20%) energy gaps.")
             print("   Consider:")
-            print("   - Testing wider epsilon range: [0.5, 1.0, 2.0]")
-            print("   - Testing more adversarial steps: [50, 100, 200]")
-            print("   - Already testing distance penalties: 0.01 and 0.001")
+            print("   - Testing higher adversarial steps: [150, 200, 300]")
+            print("   - Testing lower adversarial steps: [2, 3, 10]")
+            print("   - Adjusting curriculum parameters")
         
         print(f"\n{'='*80}\n")
     
@@ -871,9 +829,9 @@ class ExperimentRunner:
         
         print(f"Sweep results saved to: {results_file}")
     
-    def evaluate_model(self, dataset, model_type='baseline', ood=False):
+    def evaluate_model(self, dataset, model_type='baseline', ood=False, seed=None):
         """Evaluate a trained model on same or harder difficulty"""
-        result_dir = self.get_result_dir(dataset, model_type)
+        result_dir = self.get_result_dir(dataset, model_type, seed=seed)
         
         # Check if model exists
         if not os.path.exists(f'{result_dir}/model-20.pt'):
@@ -909,7 +867,6 @@ class ExperimentRunner:
             cmd.extend([
                 '--use-anm',
                 '--anm-adversarial-steps', '5',
-                '--anm-distance-penalty', str(DISTANCE_PENALTY),
                 # ANM now always uses curriculum, no need for --use-curriculum flag
             ])
         
@@ -1300,9 +1257,8 @@ class ExperimentRunner:
             
             if 0.95 <= ratio <= 1.05:
                 recommendations += "1. Increase --anm-adversarial-steps\n   to higher values (50-135)\n\n"
-                recommendations += "2. Increase epsilon to 0.5-1.0\n\n"
-                recommendations += "3. Reduce distance penalty\n   from 0.1 to 0.01\n\n"
-                recommendations += "4. Start ANM earlier\n   (5% instead of 10%)"
+                recommendations += "2. Start ANM earlier\n   (5% instead of 10%)\n\n"
+                recommendations += "3. Use more aggressive curriculum"
             elif ratio < 0.95:
                 recommendations += "1. Check gradient sign\n   (should maximize energy)\n\n"
                 recommendations += "2. Verify energy computation\n\n"
@@ -1312,8 +1268,8 @@ class ExperimentRunner:
                 recommendations += "✓ Current settings working\n\n"
                 recommendations += "Consider:\n"
                 recommendations += "• Longer training\n"
-                recommendations += "• Fine-tune epsilon\n"
-                recommendations += "• Adjust adversarial steps"
+                recommendations += "• Fine-tune adversarial steps\n"
+                recommendations += "• Adjust curriculum parameters"
         
         ax.text(0.1, 0.9, recommendations, transform=ax.transAxes,
                 fontsize=10, verticalalignment='top',
@@ -1343,15 +1299,13 @@ class ExperimentRunner:
                 
                 print("  RECOMMENDED FIXES:")
                 print("  1. Increase anm_adversarial_steps to higher values (50-135)")
-                print("  2. Increase epsilon from 0.1 to 0.5-1.0")
-                print("  3. Reduce anm_distance_penalty from 0.1 to 0.01")
-                print("  4. Start ANM earlier in curriculum (5% instead of 10%)")
-                print("  5. Use more aggressive curriculum with higher ANM percentages")
+                print("  2. Start ANM earlier in curriculum (5% instead of 10%)")
+                print("  3. Use more aggressive curriculum with higher ANM percentages")
+                print("  4. Adjust curriculum temperature and ratios")
                 
                 print("\n  CODE CHANGES NEEDED:")
-                print("  - In train.py: --anm-adversarial-steps 20")
-                print("  - In adversarial_corruption.py: increase eps_iter")
-                print("  - In denoising_diffusion_pytorch_1d.py: reduce distance_penalty weight")
+                print("  - In train.py: --anm-adversarial-steps 50")
+                print("  - In curriculum_config.py: adjust stage timing and ratios")
                 
             elif ratio < 0.95:
                 print("  ❌ ANM is HARMFUL - actually degrading performance\n")
@@ -1378,7 +1332,7 @@ class ExperimentRunner:
                 print("  OPTIMIZATION SUGGESTIONS:")
                 print("  1. Current settings are working")
                 print("  2. Could try increasing training steps")
-                print("  3. Fine-tune epsilon and adversarial steps")
+                print("  3. Fine-tune adversarial steps")
                 print("  4. Consider more aggressive curriculum")
         
         # Print energy analysis
@@ -1442,7 +1396,7 @@ class Phase1ExperimentRunner(ExperimentRunner):
                 'timestamp', 'experiment_id', 'config_name', 'dataset', 'seed', 
                 'train_steps', 'mse_same_difficulty', 'mse_harder_difficulty',
                 'training_time_minutes', 'model_path', 'success',
-                'anm_epsilon', 'anm_adversarial_steps', 'anm_distance_penalty',
+                'anm_adversarial_steps',
                 'random_noise_scale', 'random_noise_type'
             ]
             
@@ -1466,13 +1420,10 @@ class Phase1ExperimentRunner(ExperimentRunner):
             results.get('mse_harder', '') if results else '',
             f"{training_time_minutes:.2f}",
             self.get_result_dir('addition', experiment_spec['config_name'], 
-                              config.anm_epsilon if config.use_anm else None,
                               config.anm_adversarial_steps if config.use_anm else None,
-                              config.anm_distance_penalty if config.use_anm else None),
+                              experiment_spec['seed']),
             'success' if success else 'failed',
-            config.anm_epsilon if config.use_anm else '',
             config.anm_adversarial_steps if config.use_anm else '',
-            config.anm_distance_penalty if config.use_anm else '',
             config.random_noise_scale if config.use_random_noise else '',
             config.random_noise_type if config.use_random_noise else ''
         ]
@@ -1507,9 +1458,7 @@ class Phase1ExperimentRunner(ExperimentRunner):
         
         if config.use_anm:
             print(f"ANM parameters:")
-            print(f"  • Epsilon: {config.anm_epsilon}")
             print(f"  • Adversarial steps: {config.anm_adversarial_steps}")
-            print(f"  • Distance penalty: {config.anm_distance_penalty}")
         elif config.use_random_noise:
             print(f"Random noise parameters:")
             print(f"  • Noise type: {config.random_noise_type}")
@@ -1527,10 +1476,9 @@ class Phase1ExperimentRunner(ExperimentRunner):
                 dataset=dataset,
                 model_type='anm' if config.use_anm else 'baseline',
                 force_retrain=force_retrain,
-                epsilon=config.anm_epsilon if config.use_anm else None,
                 adv_steps=config.anm_adversarial_steps if config.use_anm else None,
                 train_steps=PHASE1_EXPERIMENTAL_DESIGN['train_steps_per_experiment'],
-                distance_penalty=config.anm_distance_penalty if config.use_anm else None
+                seed=seed
             )
         
         training_time_minutes = (time.time() - start_time) / 60
@@ -1581,14 +1529,13 @@ class Phase1ExperimentRunner(ExperimentRunner):
         if config.use_anm:
             return self.evaluate_model_with_config(
                 dataset,
-                epsilon=config.anm_epsilon,
                 adv_steps=config.anm_adversarial_steps,
                 ood=ood,
                 train_steps=PHASE1_EXPERIMENTAL_DESIGN['train_steps_per_experiment'],
-                distance_penalty=config.anm_distance_penalty
+                seed=seed
             )
         else:
-            return self.evaluate_model(dataset, 'baseline', ood=ood)
+            return self.evaluate_model(dataset, 'baseline', ood=ood, seed=seed)
     
     def run_phase1_viability_test(self, dataset='addition', force_retrain=False):
         """

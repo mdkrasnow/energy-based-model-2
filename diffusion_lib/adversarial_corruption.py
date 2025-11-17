@@ -121,7 +121,7 @@ def _adversarial_corruption(
         energy, grad = ops.model(inp, xmin_noise, t, return_both=True)
 
         step_scale = 1.0 * (0.7 ** i)
-        xmin_noise = xmin_noise - opt_step_size * grad * step_scale
+        xmin_noise = xmin_noise + opt_step_size * grad * step_scale
 
         if mask is not None:
             xmin_noise = xmin_noise * (1 - mask) + mask * data_cond
@@ -134,8 +134,8 @@ def _adversarial_corruption(
             else:
                 sf = 1.0
 
-            max_val = _extract(ops.sqrt_alphas_cumprod, t, xmin_noise.shape) * sf
-            xmin_noise = torch.clamp(xmin_noise, -max_val, max_val)
+            # max_val = _extract(ops.sqrt_alphas_cumprod, t, xmin_noise.shape) * sf
+            # xmin_noise = torch.clamp(xmin_noise, -max_val, max_val)
 
         xmin_noise.requires_grad_(True)
 

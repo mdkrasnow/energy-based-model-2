@@ -11,9 +11,7 @@ class Phase1Config:
     name: str
     description: str
     use_anm: bool
-    anm_epsilon: float = None
     anm_adversarial_steps: int = None
-    anm_distance_penalty: float = None
     anm_temperature: float = 1.0
     anm_clean_ratio: float = 0.1
     anm_adversarial_ratio: float = 0.8  
@@ -29,9 +27,7 @@ class Phase1Config:
         if self.use_anm:
             args.extend([
                 '--use-anm',
-                '--anm-epsilon', str(self.anm_epsilon),
                 '--anm-adversarial-steps', str(self.anm_adversarial_steps),
-                '--anm-distance-penalty', str(self.anm_distance_penalty),
                 '--anm-temperature', str(self.anm_temperature),
                 '--anm-clean-ratio', str(self.anm_clean_ratio),
                 '--anm-adversarial-ratio', str(self.anm_adversarial_ratio),
@@ -50,7 +46,7 @@ class Phase1Config:
     def get_result_suffix(self) -> str:
         """Get unique suffix for result directory naming"""
         if self.use_anm:
-            return f"anm_eps{self.anm_epsilon}_steps{self.anm_adversarial_steps}_dp{self.anm_distance_penalty}"
+            return f"anm_steps{self.anm_adversarial_steps}"
         elif self.use_random_noise:
             return f"randomnoise_{self.random_noise_type}_scale{self.random_noise_scale}"
         else:
@@ -69,9 +65,7 @@ PHASE1_CONFIGURATIONS = {
         name="anm_best", 
         description="ANM with best-known hyperparameters from previous experiments",
         use_anm=True,
-        anm_epsilon=1.0,
         anm_adversarial_steps=5,
-        anm_distance_penalty=0.001,
         anm_temperature=1.0,
         anm_clean_ratio=0.1,
         anm_adversarial_ratio=0.8,
@@ -80,11 +74,9 @@ PHASE1_CONFIGURATIONS = {
     
     "anm_extreme": Phase1Config(
         name="anm_extreme",
-        description="ANM with extreme simplification - single step, no distance penalty",
+        description="ANM with extreme simplification - single step",
         use_anm=True, 
-        anm_epsilon=1.0,
         anm_adversarial_steps=1,  # Minimal steps
-        anm_distance_penalty=0.0,  # No distance constraint
         anm_temperature=1.0,
         anm_clean_ratio=0.1,
         anm_adversarial_ratio=0.8,
@@ -123,7 +115,7 @@ PHASE1_EXPERIMENTAL_DESIGN = {
     "num_configs": 4,
     "seeds_per_config": 5,
     "total_experiments": 20,  # 4 × 5 = 20 training runs
-    "train_steps_per_experiment": 20000,  # Reduced for Phase 1 speed
+    "train_steps_per_experiment": 1000,  # Reduced for Phase 1 speed
     "statistical_alpha": 0.05,
     "bonferroni_alpha": 0.0125,  # 0.05 / 4 configs
     "effect_size_threshold": 0.3,  # Cohen's d > 0.3 (small-medium effect)
@@ -183,8 +175,8 @@ PHASE1_CONFIG_RATIONALE = {
     },
     "anm_extreme": {
         "purpose": "Test minimal ANM to isolate core mechanism",
-        "expectation": "Pure energy maximization without distance constraints",
-        "critical_finding": "If this succeeds, distance penalty is unnecessary complexity"
+        "expectation": "Pure energy maximization with minimal computational cost",
+        "critical_finding": "If this succeeds, single-step ANM is sufficient"
     },
     "random_noise": {
         "purpose": "Critical sanity check against unstructured corruption",
@@ -211,7 +203,7 @@ def print_phase1_experimental_design():
     for i, (name, config) in enumerate(PHASE1_CONFIGURATIONS.items(), 1):
         print(f"  {i}. {config.name.upper()}: {config.description}")
         if config.use_anm:
-            print(f"     → ε={config.anm_epsilon}, steps={config.anm_adversarial_steps}, dp={config.anm_distance_penalty}")
+            print(f"     → steps={config.anm_adversarial_steps}")
         elif config.use_random_noise:
             print(f"     → {config.random_noise_type} noise, scale={config.random_noise_scale}")
         print()
@@ -250,9 +242,7 @@ def validate_phase1_configs():
     assert len(anm_configs) == 2, f"Expected 2 ANM configs, got {len(anm_configs)}"
     
     for config in anm_configs:
-        assert config.anm_epsilon is not None, f"ANM config {config.name} missing epsilon"
         assert config.anm_adversarial_steps is not None, f"ANM config {config.name} missing steps"
-        assert config.anm_distance_penalty is not None, f"ANM config {config.name} missing distance penalty"
     
     # Validate baseline configuration
     baseline = PHASE1_CONFIGURATIONS["ired_baseline"]

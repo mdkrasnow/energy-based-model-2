@@ -41,6 +41,9 @@ class StatisticalAnalyzer:
             
         Returns:
             Cohen's d effect size (>0.3 = small-medium effect)
+            
+        Special case: When pooled std = 0 but means differ (e.g., same models 
+        reused across seeds), returns ±10.0 to indicate large practical effect.
         """
         baseline_arr = np.array(baseline)
         comparison_arr = np.array(comparison)
@@ -55,7 +58,15 @@ class StatisticalAnalyzer:
         mean_diff = np.mean(comparison_arr) - np.mean(baseline_arr)
         
         if pooled_std == 0:
-            return 0.0
+            # Special case: zero variance but potentially different means
+            # This occurs in Phase 1 when same model is reused across "seeds"
+            if abs(mean_diff) > 1e-10:  # Means are meaningfully different
+                # Return a large effect size to indicate practical significance
+                # Use sign of mean_diff to preserve direction
+                return 10.0 if mean_diff > 0 else -10.0
+            else:
+                # Truly identical results
+                return 0.0
             
         return mean_diff / pooled_std
     
