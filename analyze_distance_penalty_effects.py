@@ -904,8 +904,7 @@ class DistancePenaltyAnalyzer:
                 t=t,
                 mask=None,
                 data_cond=None,
-                base_noise_scale=3.0,
-                epsilon=distance_penalty
+                base_noise_scale=3.0
             )
             return y_anm
         except Exception as e:

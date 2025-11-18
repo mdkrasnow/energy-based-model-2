@@ -28,6 +28,7 @@ import time
 import re
 import torch
 import glob
+from checkpoint_manager import get_checkpoint_manager, ModelConfig
 import torch.nn.functional as F
 import numpy as np
 import matplotlib
@@ -97,7 +98,35 @@ class ExperimentRunner:
         }
         
     def get_result_dir(self, dataset, model_type='baseline', adv_steps=None, seed=None):
-        """Get the results directory for a given dataset and model type"""
+        """
+        Get the results directory for a given dataset and model type.
+        
+        Args:
+            dataset: Dataset name ('addition', 'inverse', 'lowrank')
+            model_type: Model type - MUST be exactly 'anm' or 'baseline' 
+            adv_steps: Number of adversarial steps (required for ANM, ignored for baseline)
+            seed: Random seed for unique directory naming
+            
+        Raises:
+            ValueError: If model_type is invalid or required parameters missing
+        """
+        # STRICT INPUT VALIDATION to prevent config_name/model_type confusion
+        if model_type not in ['anm', 'baseline']:
+            raise ValueError(
+                f"Invalid model_type='{model_type}'. Must be exactly 'anm' or 'baseline'. "
+                f"If you're seeing config names like 'ired_baseline', 'anm_complete', etc., "
+                f"you need to derive model_type from config.use_anm instead."
+            )
+        
+        if model_type == 'anm' and adv_steps is None:
+            raise ValueError(
+                f"model_type='anm' requires adv_steps parameter to be specified. "
+                f"Cannot generate unique path for ANM model without adversarial steps."
+            )
+        
+        if dataset not in ['addition', 'inverse', 'lowrank']:
+            raise ValueError(f"Unknown dataset: '{dataset}'. Must be one of: addition, inverse, lowrank")
+        
         base = f'results/ds_{dataset}/model_mlp_diffsteps_{DIFFUSION_STEPS}'
         if model_type == 'anm':
             if adv_steps is not None:
@@ -123,6 +152,17 @@ class ExperimentRunner:
             return None
             
         device = device if torch.cuda.is_available() else 'cpu'
+        
+        # CHECKPOINT VERIFICATION: Verify which checkpoint is actually loaded
+        checkpoint_manager = get_checkpoint_manager()
+        # Note: We don't have full config here, so just verify file integrity
+        verification = checkpoint_manager.verify_checkpoint_integrity(checkpoint_path, None)
+        
+        print(f"📁 [CHECKPOINT_LOAD] Loading: {checkpoint_path}")
+        print(f"   File size: {verification.get('size_mb', 'unknown')} MB")
+        print(f"   File hash: {verification.get('file_hash', 'unknown')}")
+        print(f"   Valid: {verification.get('is_valid', False)}")
+        
         checkpoint = torch.load(checkpoint_path, map_location=device)
         
         # Get dataset dimensions
@@ -685,8 +725,42 @@ class ExperimentRunner:
         result_dir = self.get_result_dir(dataset, 'anm', adv_steps, seed)
         actual_train_steps = train_steps if train_steps is not None else TRAIN_ITERATIONS
         
-        if not os.path.exists(f'{result_dir}/model-1.pt'):
+        # ENHANCED CHECKPOINT VERIFICATION: Log comprehensive checkpoint info
+        checkpoint_path = f'{result_dir}/model-1.pt'
+        print(f"\n[CHECKPOINT_DEBUG] Config: anm_steps{adv_steps}, Seed: {seed}")
+        print(f"[CHECKPOINT_DEBUG] Expected path: {checkpoint_path}")
+        
+        if not os.path.exists(checkpoint_path):
+            print(f"[CHECKPOINT_DEBUG] ❌ Checkpoint does not exist: {checkpoint_path}")
             return None
+        else:
+            # Add comprehensive checkpoint verification
+            checkpoint_manager = get_checkpoint_manager()
+            
+            # Create ModelConfig for this evaluation (with error handling)
+            try:
+                model_config = ModelConfig(
+                    dataset=dataset,
+                    model_type='anm',
+                    anm_adversarial_steps=adv_steps,
+                    seed=seed
+                )
+                verification = checkpoint_manager.verify_checkpoint_integrity(
+                    Path(checkpoint_path), model_config
+                )
+            except Exception as e:
+                print(f"[CHECKPOINT_DEBUG] ⚠️  Config validation failed: {e}")
+                # Fallback to basic verification without config
+                verification = checkpoint_manager.verify_checkpoint_integrity(
+                    Path(checkpoint_path), None
+                )
+            
+            print(f"[CHECKPOINT_DEBUG] ✅ Checkpoint verification:")
+            print(f"   Path: {checkpoint_path}")
+            print(f"   Size: {verification.get('size_mb', 'unknown')} MB")
+            print(f"   Hash: {verification.get('file_hash', 'unknown')}")
+            print(f"   Modified: {verification.get('modified_timestamp', 'unknown')}")
+            print(f"   Valid: {verification.get('is_valid', False)}")
         
         cmd = [
             'python', 'train.py',
@@ -833,9 +907,13 @@ class ExperimentRunner:
         """Evaluate a trained model on same or harder difficulty"""
         result_dir = self.get_result_dir(dataset, model_type, seed=seed)
         
-        # Enhanced fail-fast validation with actionable error messages
+        # DEBUG: Log checkpoint path being used
         expected_model_path = f'{result_dir}/model-1.pt'
+        print(f"\n[CHECKPOINT_DEBUG] Config: {model_type}, Seed: {seed}, Path: {expected_model_path}")
+        
+        # Enhanced fail-fast validation with actionable error messages
         if not os.path.exists(expected_model_path):
+            print(f"[CHECKPOINT_DEBUG] ❌ Checkpoint does not exist: {expected_model_path}")
             print(f"\n{'='*80}")
             print(f"ERROR: No trained model found for {dataset} ({model_type})")
             print(f"Expected location: {expected_model_path}")
@@ -1450,7 +1528,9 @@ class Phase1ExperimentRunner(ExperimentRunner):
             results.get('mse_same', '') if results else '',
             results.get('mse_harder', '') if results else '',
             f"{training_time_minutes:.2f}",
-            self.get_result_dir('addition', experiment_spec['config_name'], 
+            # FIX: Use proper model_type ('anm'/'baseline') instead of config_name
+            # This was causing all ANM experiments to log baseline paths
+            self.get_result_dir('addition', 'anm' if config.use_anm else 'baseline', 
                               config.anm_adversarial_steps if config.use_anm else None,
                               experiment_spec['seed']),
             'success' if success else 'failed',
@@ -1529,6 +1609,8 @@ class Phase1ExperimentRunner(ExperimentRunner):
     
     def _evaluate_phase1_model(self, dataset, config, seed, ood=False):
         """Evaluate a Phase 1 model and return MSE"""
+        print(f"\n[PHASE1_DEBUG] Evaluating config: {config.name}, ANM: {config.use_anm}, Steps: {getattr(config, 'anm_adversarial_steps', 'N/A')}, Seed: {seed}")
+        
         # Use existing evaluation method
         if config.use_anm:
             return self.evaluate_model_with_config(
@@ -1609,6 +1691,26 @@ class Phase1ExperimentRunner(ExperimentRunner):
         
         total_time_hours = (time.time() - total_start_time) / 3600
         print(f"\n🕒 Total Phase 1 execution time: {total_time_hours:.2f} hours")
+        
+        # DEBUG: Print checkpoint path summary for all configurations
+        print(f"\n{'='*80}")
+        print("CHECKPOINT PATH VERIFICATION SUMMARY")
+        print("="*80)
+        configs = get_all_phase1_configs()
+        seeds = PHASE1_EXPERIMENTAL_DESIGN['random_seeds']
+        
+        for config_name, config in configs.items():
+            print(f"\n{config_name.upper()}:")
+            if config.use_anm:
+                adv_steps = config.anm_adversarial_steps
+                for seed in seeds:
+                    result_dir = self.get_result_dir('addition', 'anm', adv_steps, seed)
+                    print(f"  Seed {seed}: {result_dir}/model-1.pt")
+            else:
+                for seed in seeds:
+                    result_dir = self.get_result_dir('addition', 'baseline', None, seed)
+                    print(f"  Seed {seed}: {result_dir}/model-1.pt")
+        print("="*80)
         
         # Statistical analysis
         return self._analyze_phase1_results(all_experiment_results, dataset, total_time_hours)

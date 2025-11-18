@@ -30,6 +30,7 @@ from diffusion_lib.denoising_diffusion_pytorch_1d import GaussianDiffusion1D
 from models import EBM, DiffusionWrapper
 from dataset import Addition, Inverse, LowRankDataset
 from diffusion_lib.adversarial_corruption import _adversarial_corruption
+from checkpoint_manager import CheckpointManager, ModelConfig
 
 
 # Hyperparameters - Updated to 50k iterations
@@ -118,12 +119,66 @@ class ExperimentRunner:
         return base
 
     def load_model_for_diagnostics(self, model_dir, device='cuda'):
-        """Load model checkpoint for diagnostic purposes with robust prefix handling"""
+        """Load model checkpoint for diagnostic purposes with CheckpointManager integration"""
         checkpoint_path = Path(model_dir) / 'model-50.pt'
         if not checkpoint_path.exists():
             return None
             
         device = device if torch.cuda.is_available() else 'cpu'
+        
+        # Use CheckpointManager for consistent path verification
+        checkpoint_manager = CheckpointManager()
+        try:
+            # Try to parse model configuration from directory path
+            dir_name = str(model_dir)
+            
+            # Extract dataset name
+            if 'addition' in dir_name:
+                dataset_name = 'addition'
+            elif 'inverse' in dir_name:
+                dataset_name = 'inverse'
+            else:
+                dataset_name = 'lowrank'
+            
+            # Extract model type and parameters
+            if '_anm_' in dir_name:
+                model_type = 'anm'
+                # Extract ANM parameters if available
+                anm_adversarial_steps = None
+                import re
+                steps_match = re.search(r'_steps(\d+)', dir_name)
+                if steps_match:
+                    anm_adversarial_steps = int(steps_match.group(1))
+            else:
+                model_type = 'baseline'
+                anm_adversarial_steps = None
+            
+            # Create ModelConfig for verification
+            config = ModelConfig(
+                dataset=dataset_name,
+                model_type=model_type,
+                diffusion_steps=DIFFUSION_STEPS,
+                rank=RANK,
+                anm_adversarial_steps=anm_adversarial_steps
+            )
+            
+            # Verify checkpoint with CheckpointManager
+            checkpoint_manager.verify_checkpoint_path(checkpoint_path, config)
+            print(f"📁 [CHECKPOINT_LOAD] {checkpoint_path} - ✅ Verified with CheckpointManager")
+            
+        except Exception as e:
+            # Fallback to basic verification if CheckpointManager fails
+            print(f"📁 [CHECKPOINT_LOAD] {checkpoint_path} - ⚠️ CheckpointManager verification failed: {e}")
+            try:
+                import os
+                import hashlib
+                stat = checkpoint_path.stat()
+                with open(checkpoint_path, 'rb') as f:
+                    file_hash = hashlib.md5(f.read(1024*1024)).hexdigest()[:8]
+                print(f"   Basic verification - Size: {round(stat.st_size / (1024*1024), 2)} MB, Hash: {file_hash}")
+            except Exception as basic_error:
+                print(f"   Basic verification failed: {basic_error}")
+        
         checkpoint = torch.load(checkpoint_path, map_location=device)
         
         # Get dataset dimensions
@@ -298,8 +353,7 @@ class ExperimentRunner:
             t=t,
             mask=None,  # No masking in diagnostic context
             data_cond=None,  # No conditioning in diagnostic context
-            base_noise_scale=3.0,  # Standard base noise scale
-            epsilon=anm_distance_penalty
+            base_noise_scale=3.0  # Standard base noise scale
         )
 
     def run_comparative_diagnostics(self, baseline_dir, anm_dir, dataset='addition', config_name='default'):

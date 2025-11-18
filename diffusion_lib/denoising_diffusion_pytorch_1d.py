@@ -971,6 +971,24 @@ class Trainer1D(object):
             if os.path.exists(save_path):
                 file_size = os.path.getsize(save_path)
                 print(f"DEBUG: Saved file verified. Size: {file_size} bytes")
+                
+                # ENHANCED CHECKPOINT PATH LOGGING for diagnostic tracing
+                print(f"\n💾 [CHECKPOINT_SAVED] Milestone {milestone}")
+                print(f"   📁 Path: {save_path}")
+                print(f"   📊 Size: {round(file_size / (1024*1024), 2)} MB")
+                print(f"   🕒 Step: {self.step}")
+                
+                # Calculate file hash for uniqueness verification
+                try:
+                    import hashlib
+                    with open(save_path, 'rb') as f:
+                        file_data = f.read(1024 * 1024)  # First 1MB for performance
+                        file_hash = hashlib.md5(file_data).hexdigest()[:12]
+                    print(f"   🔑 Hash: {file_hash}")
+                except Exception as hash_error:
+                    print(f"   🔑 Hash: Failed to calculate ({hash_error})")
+                
+                print()  # Add blank line for readability
             else:
                 print(f"ERROR: Save appeared successful but file doesn't exist: {save_path}")
         except Exception as e:

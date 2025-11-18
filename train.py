@@ -14,6 +14,7 @@ from dataset import Addition, LowRankDataset, Inverse
 from reasoning_dataset import FamilyTreeDataset, GraphConnectivityDataset, FamilyDatasetWrapper, GraphDatasetWrapper
 from planning_dataset import PlanningDataset, PlanningDatasetOnline
 from sat_dataset import SATNetDataset, SudokuDataset, SudokuRRNDataset, SudokuRRNLatentDataset
+from checkpoint_manager import CheckpointManager, ModelConfig
 import torch
 import numpy as np
 import random
@@ -624,4 +625,132 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"WARNING: Failed to save training metadata: {e}")
         # Don't fail training if metadata saving fails
+    
+    # =========================================================================
+    # COMPREHENSIVE CHECKPOINT DIAGNOSTIC OUTPUT
+    # This provides complete tracing of where checkpoints were saved
+    # =========================================================================
+    print(f"\n{'='*80}")
+    print("🔍 COMPREHENSIVE CHECKPOINT DIAGNOSTIC REPORT")
+    print("="*80)
+    print(f"Training completed for: {FLAGS.dataset}")
+    print(f"Model type: {'ANM' if FLAGS.use_anm else 'BASELINE'}")
+    print(f"Seed: {FLAGS.seed}")
+    print(f"Training steps: {FLAGS.train_steps}")
+    if FLAGS.use_anm:
+        print(f"ANM adversarial steps: {FLAGS.anm_adversarial_steps}")
+    print(f"Results directory: {result_dir}")
+    print()
+    
+    # Find and verify all checkpoint files
+    print("📁 CHECKPOINT FILES:")
+    checkpoint_files = []
+    
+    # Look for all model checkpoint files in the result directory
+    import glob
+    checkpoint_pattern = os.path.join(result_dir, "model-*.pt")
+    found_checkpoints = glob.glob(checkpoint_pattern)
+    
+    if found_checkpoints:
+        for checkpoint_path in sorted(found_checkpoints):
+            try:
+                # Get file info
+                stat = os.stat(checkpoint_path)
+                size_mb = round(stat.st_size / (1024*1024), 2)
+                
+                # Calculate file hash for uniqueness verification
+                import hashlib
+                with open(checkpoint_path, 'rb') as f:
+                    # Read first 1MB for performance
+                    file_data = f.read(1024 * 1024)
+                    file_hash = hashlib.md5(file_data).hexdigest()[:12]
+                
+                # Extract milestone number
+                import re
+                milestone_match = re.search(r'model-(\d+)\.pt', checkpoint_path)
+                milestone = milestone_match.group(1) if milestone_match else "unknown"
+                
+                print(f"   ✅ {os.path.basename(checkpoint_path)}")
+                print(f"      Full path: {checkpoint_path}")
+                print(f"      Size: {size_mb} MB")
+                print(f"      File hash: {file_hash}")
+                print(f"      Milestone: {milestone}")
+                print(f"      Modified: {time.ctime(stat.st_mtime)}")
+                
+                checkpoint_files.append({
+                    'path': checkpoint_path,
+                    'size_mb': size_mb,
+                    'hash': file_hash,
+                    'milestone': milestone
+                })
+                
+            except Exception as e:
+                print(f"   ❌ {os.path.basename(checkpoint_path)}: Error reading file ({e})")
+    else:
+        print("   ⚠️  No checkpoint files found!")
+        # This might happen if training failed
+    
+    print(f"\n📊 TRAINING CONFIGURATION SUMMARY:")
+    print(f"   Dataset: {FLAGS.dataset}")
+    print(f"   Model: {FLAGS.model}")
+    print(f"   Batch size: {FLAGS.batch_size}")
+    print(f"   Diffusion steps: {FLAGS.diffusion_steps}")
+    print(f"   Rank: {FLAGS.rank}")
+    print(f"   Seed: {FLAGS.seed}")
+    print(f"   Training steps: {FLAGS.train_steps}")
+    if hasattr(FLAGS, 'learning_rate') and FLAGS.learning_rate:
+        print(f"   Learning rate: {FLAGS.learning_rate}")
+    
+    if FLAGS.use_anm:
+        print(f"\n⚔️  ANM CONFIGURATION:")
+        print(f"   Adversarial steps: {FLAGS.anm_adversarial_steps}")
+        if hasattr(FLAGS, 'anm_epsilon') and FLAGS.anm_epsilon is not None:
+            print(f"   Epsilon: {FLAGS.anm_epsilon}")
+        if hasattr(FLAGS, 'anm_temperature') and FLAGS.anm_temperature is not None:
+            print(f"   Temperature: {FLAGS.anm_temperature}")
+        if hasattr(FLAGS, 'anm_clean_ratio') and FLAGS.anm_clean_ratio is not None:
+            print(f"   Clean ratio: {FLAGS.anm_clean_ratio}")
+        if hasattr(FLAGS, 'anm_adversarial_ratio') and FLAGS.anm_adversarial_ratio is not None:
+            print(f"   Adversarial ratio: {FLAGS.anm_adversarial_ratio}")
+        if hasattr(FLAGS, 'anm_gaussian_ratio') and FLAGS.anm_gaussian_ratio is not None:
+            print(f"   Gaussian ratio: {FLAGS.anm_gaussian_ratio}")
+    
+    # Path uniqueness verification
+    print(f"\n🔒 PATH UNIQUENESS VERIFICATION:")
+    if len(set([cf['hash'] for cf in checkpoint_files])) == len(checkpoint_files):
+        print("   ✅ All checkpoint files have unique hashes")
+    else:
+        print("   ⚠️  Warning: Some checkpoint files have identical hashes")
+    
+    expected_path_pattern = f"results/ds_{FLAGS.dataset}/model_{FLAGS.model}_diffsteps_{FLAGS.diffusion_steps}"
+    if FLAGS.use_anm and FLAGS.anm_adversarial_steps:
+        expected_path_pattern += f"_anm_steps{FLAGS.anm_adversarial_steps}"
+    if FLAGS.seed is not None:
+        expected_path_pattern += f"_seed{FLAGS.seed}"
+    
+    print(f"   Expected path pattern: {expected_path_pattern}")
+    if result_dir.endswith(expected_path_pattern.replace("results/", "")):
+        print("   ✅ Checkpoint saved to correct path pattern")
+    else:
+        print("   ⚠️  Checkpoint path differs from expected pattern")
+        print(f"   Actual: {result_dir}")
+    
+    print(f"\n🎯 EVALUATION INSTRUCTIONS:")
+    print("To evaluate this model, use the checkpoint path above with:")
+    if FLAGS.use_anm:
+        eval_cmd = f"python train.py --dataset {FLAGS.dataset} --model {FLAGS.model} --use-anm --anm-adversarial-steps {FLAGS.anm_adversarial_steps}"
+        if FLAGS.seed is not None:
+            eval_cmd += f" --seed {FLAGS.seed}"
+        eval_cmd += " --load-milestone 1 --evaluate"
+        print(f"   {eval_cmd}")
+    else:
+        eval_cmd = f"python train.py --dataset {FLAGS.dataset} --model {FLAGS.model}"
+        if FLAGS.seed is not None:
+            eval_cmd += f" --seed {FLAGS.seed}"
+        eval_cmd += " --load-milestone 1 --evaluate"
+        print(f"   {eval_cmd}")
+    
+    print(f"\n{'='*80}")
+    print("✅ TRAINING COMPLETE - Diagnostic report above shows all checkpoint locations")
+    print("="*80)
 
