@@ -120,7 +120,7 @@ def _adversarial_corruption(
         energy, grad = ops.model(inp, xmin_noise, t, return_both=True)
 
         step_scale = 1.0 * (0.7 ** i)
-        xmin_noise = xmin_noise + opt_step_size * grad * step_scale
+        xmin_noise = xmin_noise - opt_step_size * grad * step_scale # should this be plus or minus?
 
         if mask is not None:
             xmin_noise = xmin_noise * (1 - mask) + mask * data_cond
