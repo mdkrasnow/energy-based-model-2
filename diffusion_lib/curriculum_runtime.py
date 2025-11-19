@@ -13,6 +13,7 @@ class StageSnapshot:
     clean_ratio: float
     adversarial_ratio: float
     gaussian_ratio: float
+    hard_negative_ratio: float
     epsilon_multiplier: float
     temperature: float
 
@@ -192,14 +193,16 @@ class CurriculumRuntime:
             clean_ratio=stage.clean_ratio,
             adversarial_ratio=stage.adversarial_ratio,
             gaussian_ratio=stage.gaussian_ratio,
+            hard_negative_ratio=stage.hard_negative_ratio,
             epsilon_multiplier=stage.epsilon_multiplier,
             temperature=stage.temperature,
         )
         if intensity_multiplier < 1.0:
             clean_boost = (1.0 - intensity_multiplier) * 0.3
             s.clean_ratio = min(1.0, s.clean_ratio + clean_boost)
-            s.adversarial_ratio = max(0.0, s.adversarial_ratio - clean_boost * 0.7)
-            s.gaussian_ratio = max(0.0, s.gaussian_ratio - clean_boost * 0.3)
+            s.adversarial_ratio = max(0.0, s.adversarial_ratio - clean_boost * 0.4)
+            s.gaussian_ratio = max(0.0, s.gaussian_ratio - clean_boost * 0.2)
+            s.hard_negative_ratio = max(0.0, s.hard_negative_ratio - clean_boost * 0.4)
 
         # Stage transition notice + baseline set
         if self.current_stage_name != s.name:
