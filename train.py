@@ -20,6 +20,7 @@ import numpy as np
 import random
 
 import argparse
+import time
 
 try:
     import mkl

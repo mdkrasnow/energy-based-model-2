@@ -57,7 +57,7 @@ from phase1_configs import (
 # Hyperparameters from the paper (Appendix A)
 BATCH_SIZE = 2048
 LEARNING_RATE = 1e-4
-TRAIN_ITERATIONS = 1000  
+TRAIN_ITERATIONS = 50000  
 DIFFUSION_STEPS = 10
 RANK = 20  # For 20x20 matrices
 

@@ -105,7 +105,7 @@ PHASE1_EXPERIMENTAL_DESIGN = {
     "num_configs": 4,
     "seeds_per_config": 5,
     "total_experiments": 20,  # 4 × 5 = 20 training runs
-    "train_steps_per_experiment": 1000, 
+    "train_steps_per_experiment": 50000, 
     "statistical_alpha": 0.05,
     "bonferroni_alpha": 0.0125,  # 0.05 / 4 configs
     "effect_size_threshold": 0.3,  # Cohen's d > 0.3 (small-medium effect)

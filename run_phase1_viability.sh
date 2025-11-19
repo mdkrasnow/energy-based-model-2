@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH -J phase1_statistical_viability      # Job name
-#SBATCH -p gpu_test                          # Partition (use gpu for real runs)
+#SBATCH -p gpu                         # Partition (use gpu for real runs)
 #SBATCH --account=ydu_lab                    # Your lab account
 #SBATCH --gres=gpu:1                         # 1 GPU
 #SBATCH -c 16                                # 16 CPU cores
-#SBATCH -t 00-01:00:00                       # 1 hours
+#SBATCH -t 02-00:00:00                       # 2 days
 #SBATCH --mem=64G                            # 64 GB RAM
 #SBATCH -o phase1_viability_%j.out           # STDOUT file
 #SBATCH -e phase1_viability_%j.err           # STDERR file
