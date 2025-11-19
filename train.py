@@ -466,6 +466,16 @@ if __name__ == "__main__":
         anm_distance_penalty = 0.1
         anm_warmup_steps = 0
     
+    # ANM (Adversarial Negative Mining) requires supervise_energy_landscape=True because energy losses 
+    # must be backpropagated. Without this, ANM silently degrades to baseline IRED training.
+    if FLAGS.use_anm and not FLAGS.supervise_energy_landscape:
+        print(
+            'Warning: ANM requires energy supervision - auto-enabling supervise_energy_landscape=True. '
+            'This coupling ensures energy losses are backpropagated. '
+            'To silence this warning, explicitly set --supervise-energy-landscape'
+        )
+        FLAGS.supervise_energy_landscape = True
+    
     diffusion = GaussianDiffusion1D(
         model,
         seq_length = 32,

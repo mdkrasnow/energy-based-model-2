@@ -211,6 +211,15 @@ class GaussianDiffusion1D(nn.Module):
         self.anm_distance_penalty = anm_distance_penalty
         self.anm_warmup_steps = anm_warmup_steps
         
+        # Validate ANM configuration: Adversarial Negative Mining requires energy supervision
+        # because without it, energy losses are computed but never added to the total loss (p_losses:687-742)
+        if use_adversarial_corruption and not supervise_energy_landscape:
+            raise ValueError(
+                'ANM (use_adversarial_corruption=True) requires supervise_energy_landscape=True. '
+                'Energy losses will not be backpropagated otherwise. '
+                'Enable with --supervise-energy-landscape flag or remove --use-anm'
+            )
+        
         # Store hard negative mining parameters
         self.hnm_num_candidates = hnm_num_candidates
         self.hnm_refinement_steps = hnm_refinement_steps

@@ -775,6 +775,8 @@ class ExperimentRunner:
             '--use-anm',
             '--anm-adversarial-steps', str(adv_steps),
         ]
+        if seed is not None:
+            cmd.extend(['--seed', str(seed)])
         
         if ood:
             cmd.append('--ood')
