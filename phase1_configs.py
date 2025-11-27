@@ -41,7 +41,7 @@ class Phase1Config:
         else:
             return "baseline"
 
-# Phase 1 Core Configurations: Exactly 4 configs for statistical testing
+# Phase 1 Core Configurations: Exactly 2 configs for statistical testing (baseline + 1 ANM)
 PHASE1_CONFIGURATIONS = {
     "ired_baseline": Phase1Config(
         name="ired_baseline",
@@ -59,32 +59,11 @@ PHASE1_CONFIGURATIONS = {
         anm_clean_ratio=0,
         anm_adversarial_ratio=1,
         anm_gaussian_ratio=0
-    ),
-    
-    "anm_10": Phase1Config(
-        name="anm_extreme",
-        description="ANM with 10 steps",
-        use_anm=True, 
-        anm_adversarial_steps=10, 
-        anm_temperature=1.0,
-        anm_clean_ratio=0.1,
-        anm_adversarial_ratio=0.8,
-        anm_gaussian_ratio=0.1
-    ),
-    "anm_20": Phase1Config(
-        name="anm_extreme",
-        description="ANM with 20 steps",
-        use_anm=True, 
-        anm_adversarial_steps=20, 
-        anm_temperature=1.0,
-        anm_clean_ratio=0.1,
-        anm_adversarial_ratio=0.8,
-        anm_gaussian_ratio=0.1
     )
 }
 
-# Validation: Ensure exactly 4 configurations now that random noise is removed
-assert len(PHASE1_CONFIGURATIONS) == 4, f"Phase 1 requires exactly 4 configs, got {len(PHASE1_CONFIGURATIONS)}"
+# Validation: Ensure exactly 2 configurations (baseline + 1 ANM)
+assert len(PHASE1_CONFIGURATIONS) == 2, f"Phase 1 requires exactly 2 configs, got {len(PHASE1_CONFIGURATIONS)}"
 
 def get_phase1_config_names() -> List[str]:
     """Get list of all Phase 1 configuration names"""
@@ -102,12 +81,12 @@ def get_all_phase1_configs() -> List[Phase1Config]:
 
 # Phase 1 Experimental Design Parameters
 PHASE1_EXPERIMENTAL_DESIGN = {
-    "num_configs": 4,
+    "num_configs": 2,
     "seeds_per_config": 5,
-    "total_experiments": 20,  # 4 × 5 = 20 training runs
+    "total_experiments": 10,  # 2 × 5 = 10 training runs
     "train_steps_per_experiment": 50000, 
     "statistical_alpha": 0.05,
-    "bonferroni_alpha": 0.0125,  # 0.05 / 4 configs
+    "bonferroni_alpha": 0.025,  # 0.05 / 2 configs
     "effect_size_threshold": 0.3,  # Cohen's d > 0.3 (small-medium effect)
     "random_seeds": [42, 123, 456, 789, 999]  # Fixed seeds for reproducibility
 }
@@ -137,7 +116,7 @@ def generate_experiment_matrix() -> List[Dict[str, Any]]:
 # Phase 1 Success Criteria
 PHASE1_SUCCESS_CRITERIA = {
     "go_criteria": {
-        "statistical_significance": "p_corrected < 0.0125", 
+        "statistical_significance": "p_corrected < 0.025", 
         "effect_size": "|Cohen's d| > 0.3",
         "logical_operator": "AND",
         "minimum_configs": 1,  # ANY config meeting criteria triggers GO
@@ -146,8 +125,8 @@ PHASE1_SUCCESS_CRITERIA = {
     "no_go_criteria": {
         "condition": "ALL configs fail statistical significance OR effect size thresholds",
         "action": "STOP Phase 1, document negative results, pivot to alternatives",
-        "time_limit": "5 days maximum",
-        "compute_limit": "20 training runs maximum"
+        "time_limit": "3 days maximum",
+        "compute_limit": "10 training runs maximum"
     }
 }
 
@@ -156,17 +135,12 @@ PHASE1_CONFIG_RATIONALE = {
     "ired_baseline": {
         "purpose": "Reference condition for statistical comparison",
         "expectation": "Baseline performance to measure improvements against",
-        "critical_finding": "If other configs don't beat this, ANM provides no benefit"
+        "critical_finding": "If ANM config doesn't beat this, ANM provides no benefit"
     },
-    "anm_best": {
-        "purpose": "Test ANM with previously optimized hyperparameters",  
+    "anm_complete": {
+        "purpose": "Test ANM with 5 adversarial steps (first configuration)",  
         "expectation": "Should show best ANM performance if any exists",
         "critical_finding": "If this fails, ANM optimization is fundamentally limited"
-    },
-    "anm_extreme": {
-        "purpose": "Test minimal ANM to isolate core mechanism",
-        "expectation": "Pure energy maximization with minimal computational cost",
-        "critical_finding": "If this succeeds, single-step ANM is sufficient"
     }
 }
 
@@ -204,9 +178,9 @@ def print_phase1_experimental_design():
     print()
     
     print("⏱️  TIMELINE:")
-    print(f"  • Duration: 5 days maximum")
-    print(f"  • Compute: ~3-4 hours per experiment × 20 = 60-80 hours total")
-    print(f"  • Decision: Go/No-go within 1 week")
+    print(f"  • Duration: 3 days maximum")
+    print(f"  • Compute: ~3-4 hours per experiment × 10 = 30-40 hours total")
+    print(f"  • Decision: Go/No-go within 3-4 days")
     print()
     
     print("=" * 80)
@@ -216,13 +190,13 @@ def validate_phase1_configs():
     print("🔍 Validating Phase 1 configurations...")
     
     # Check required configurations exist
-    required_configs = ["ired_baseline", "anm_complete", "anm_10", "anm_20"]
+    required_configs = ["ired_baseline", "anm_complete"]
     for required in required_configs:
         assert required in PHASE1_CONFIGURATIONS, f"Missing required config: {required}"
     
     # Validate ANM configurations
     anm_configs = [c for c in PHASE1_CONFIGURATIONS.values() if c.use_anm]
-    assert len(anm_configs) == 3, f"Expected 3 ANM configs, got {len(anm_configs)}"
+    assert len(anm_configs) == 1, f"Expected 1 ANM config, got {len(anm_configs)}"
     
     for config in anm_configs:
         assert config.anm_adversarial_steps is not None, f"ANM config {config.name} missing steps"
@@ -241,8 +215,7 @@ if __name__ == "__main__":
     print("\n🧪 EXPERIMENT MATRIX PREVIEW:")
     experiments = generate_experiment_matrix()
     print(f"Generated {len(experiments)} total experiments:")
-    for exp in experiments[:8]:  # Show first 8 experiments
+    for exp in experiments:  # Show all experiments since there are only 10 now
         print(f"  • {exp['experiment_id']}: {exp['config'].description}")
-    print(f"  ... and {len(experiments) - 8} more experiments")
     print()
-    print(f"✓ Phase 1 configuration system ready for execution (random noise removed)")
+    print(f"✓ Phase 1 configuration system ready for execution (single ANM config)")

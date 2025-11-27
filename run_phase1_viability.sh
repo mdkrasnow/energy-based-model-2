@@ -4,7 +4,7 @@
 #SBATCH --account=ydu_lab                    # Your lab account
 #SBATCH --gres=gpu:1                         # 1 GPU
 #SBATCH -c 16                                # 16 CPU cores
-#SBATCH -t 02-00:00:00                       # 2 days
+#SBATCH -t 03-00:00:00                       # 4 days
 #SBATCH --mem=64G                            # 64 GB RAM
 #SBATCH -o phase1_viability_%j.out           # STDOUT file
 #SBATCH -e phase1_viability_%j.err           # STDERR file

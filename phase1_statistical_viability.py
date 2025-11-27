@@ -1483,7 +1483,7 @@ class Phase1ExperimentRunner(ExperimentRunner):
     Extended ExperimentRunner for Phase 1 Statistical Viability Testing
     
     Implements the complete Phase 1 workflow:
-    - 3 configurations × 5 seeds = 15 experiments
+    - 2 configurations × 5 seeds = 10 experiments
     - Statistical analysis with Bonferroni correction
     - Go/no-go decision based on p-values and effect sizes
     - CSV logging for experiment tracking
@@ -1629,7 +1629,7 @@ class Phase1ExperimentRunner(ExperimentRunner):
         """
         Main Phase 1 orchestration: Statistical viability testing
         
-        Runs 3 configurations × 5 seeds = 15 experiments with statistical analysis
+        Runs 2 configurations × 5 seeds = 10 experiments with statistical analysis
         
         Args:
             dataset: Dataset name (default: 'addition')  
@@ -1825,7 +1825,7 @@ if __name__ == "__main__":
     if args.phase1:
         print("🚀 Starting Phase 1 Statistical Viability Testing")
         print("   This implements the optimal ANM algorithm from the final synthesis")
-        print("   3 configurations × 5 seeds = 15 experiments with rigorous statistics\n")
+        print("   2 configurations × 5 seeds = 10 experiments with rigorous statistics\n")
         
         runner = Phase1ExperimentRunner(base_dir=base_dir)
         
