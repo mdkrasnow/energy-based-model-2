@@ -98,47 +98,140 @@ def _standard_ired_corruption(
 
 
 def _adversarial_corruption(
-    ops: DiffusionOps,
-    inp: torch.Tensor,
-    x_start: torch.Tensor,
-    t: torch.Tensor,
-    mask: Optional[torch.Tensor],
-    data_cond: Optional[torch.Tensor],
+    ops: "DiffusionOps",
+    inp: Tensor,
+    x_start: Tensor,
+    t: Tensor,
+    mask: Optional[Tensor],
+    data_cond: Optional[Tensor],
     base_noise_scale: float,
+    epsilon: float = 0.1,
     project: bool = True,
-) -> torch.Tensor:
-    noise = torch.randn_like(x_start)
-    xmin_noise = ops.q_sample(x_start=x_start, t=t, noise=base_noise_scale * noise)
+) -> Tensor:
+    """
+    Construct an adversarially corrupted version of `x_start` for hard-negative mining.
 
+    Args:
+        ops: DiffusionOps instance (provides energy / projection utilities).
+        inp: Conditioning input (e.g. clues), NOT the sample to perturb.
+        x_start: Ground-truth solution x_0.
+        t: Diffusion time indices (batch_size,) or broadcastable.
+        mask: Optional mask over dimensions to modify.
+        data_cond: Optional conditioning input passed through to the energy / projection ops.
+        base_noise_scale: Base scale for initial random perturbation.
+        epsilon: Distance penalty weight (kept for signature compatibility).
+        project: If True, project intermediates back to the valid constraint manifold.
+
+    Returns:
+        x_adv: Adversarially-corrupted version of `x_start`.
+    """
+
+    # --- Hyperparameters for the adversarial inner loop ---
+    num_steps = 3                # a few gradient steps is usually enough
+    step_size_scale = 0.5        # scales how aggressively we descend energy
+    max_radius_scale = 2.0       # how far from the initial random offset we allow
+
+    # Ensure everything is float and on same device
+    device = x_start.device
+    t = t.to(device)
+    if data_cond is not None:
+        data_cond = data_cond.to(device)
     if mask is not None:
-        xmin_noise = xmin_noise * (1 - mask) + mask * data_cond
+        mask = mask.to(device)
 
-    xmin_noise.requires_grad_(True)
-    opt_step_size = _extract(ops.opt_step_size, t, xmin_noise.shape)
+    batch_size = x_start.shape[0]
 
-    for i in range(ops.anm_adversarial_steps):
-        energy, grad = ops.model(inp, xmin_noise, t, return_both=True)
+    # Flatten utility for per-sample norms
+    def _flatten(x: Tensor) -> Tensor:
+        return x.view(x.shape[0], -1)
 
-        step_scale = 1.0 * (0.7 ** i)
-        xmin_noise = xmin_noise + opt_step_size * grad * step_scale # should this be plus or minus?
+    # --- 1. Sample an initial random perturbation around x_start ---
+    # We start from a noised version of x_start, similar to standard corruption
+    noise = torch.randn_like(x_start)
+    
+    if mask is not None:
+        noise = noise * (1 - mask)
+
+    # Initial random point at the correct noise level for timestep t
+    x_adv = ops.q_sample(x_start=x_start, t=t, noise=base_noise_scale * noise)
+
+    # Apply mask/conditioning immediately
+    if mask is not None:
+        x_adv = x_adv * (1 - mask) + mask * data_cond
+
+    # Radius: proportional to base_noise_scale and distance to x_start
+    # We calculate the effective radius of this initial random jump
+    with torch.no_grad():
+        delta_target = x_adv - x_start
+        delta_flat = _flatten(delta_target)
+        # Per-sample scalar radius
+        radius = delta_flat.norm(dim=1, keepdim=True).view(batch_size, *([1] * (x_start.dim() - 1)))
+
+    # --- 2. Inner PGD-style loop: descend energy while staying close to x_start ---
+    # We treat ops.model(..., return_energy=True) as returning a per-sample scalar energy.
+    adv_step_size = step_size_scale * base_noise_scale
+
+    # We'll track an L2-ball around the *original* x_start
+    max_radius = max_radius_scale * radius
+
+    # Use autograd for adversarial steps
+    for _ in range(num_steps):
+        x_adv = x_adv.detach().requires_grad_(True)
+
+        # Compute energy of the current candidate negatives.
+        # Note: inp is passed as conditioning
+        energy: Tensor = ops.model(
+            inp,
+            x_adv,
+            t,
+            return_energy=True
+        )  # shape: (batch_size,)
+
+        # We want *harder* negatives → descend the energy (lower energy = more likely/deceptive).
+        grad, = torch.autograd.grad(energy.sum(), x_adv)
 
         if mask is not None:
-            xmin_noise = xmin_noise * (1 - mask) + mask * data_cond
+            grad = grad * (1 - mask)
+
+        # Normalize gradient per sample for stable steps
+        grad_flat = _flatten(grad)
+        grad_norm = grad_flat.norm(dim=1, keepdim=True) + 1e-8
+        grad_unit = (grad_flat / grad_norm).view_as(x_adv)
+
+        # Gradient-descent step in input space
+        x_adv_step = x_adv - adv_step_size * grad_unit
+
+        # Enforce L2-ball constraint around x_start
+        delta = x_adv_step - x_start
+        delta_flat = _flatten(delta)
+        delta_norm = delta_flat.norm(dim=1, keepdim=True) + 1e-8
+
+        # Per-sample scaling to stay within max_radius
+        max_r_flat = _flatten(max_radius)
+        max_r_scalar = max_r_flat.mean(dim=1, keepdim=True)  # (B,1)
+        scale = (max_r_scalar / delta_norm).clamp(max=1.0)
+
+        delta_proj = (delta_flat * scale).view_as(x_adv_step)
+        x_adv = x_start + delta_proj
 
         if project:
+            # Masking
+            if mask is not None:
+                x_adv = x_adv * (1 - mask) + mask * data_cond
+            
+            # Clamping (Logic from ops.opt_step)
             if ops.continuous:
                 sf = 2.0
             elif ops.shortest_path:
                 sf = 0.1
             else:
                 sf = 1.0
+            
+            # Extract max_val for this timestep
+            max_val = _extract(ops.sqrt_alphas_cumprod, t, x_adv.shape) * sf
+            x_adv = torch.clamp(x_adv, -max_val, max_val)
 
-            # max_val = _extract(ops.sqrt_alphas_cumprod, t, xmin_noise.shape) * sf
-            # xmin_noise = torch.clamp(xmin_noise, -max_val, max_val)
-
-        xmin_noise.requires_grad_(True)
-
-    return xmin_noise.detach()
+    return x_adv.detach()
 
 
 
