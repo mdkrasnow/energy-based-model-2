@@ -2,7 +2,7 @@
 name: solution-debater
 description: Solution agent that participates in multi-agent debate, generating solutions and critiquing other agents' proposals
 tools: Read, Write, Grep, Bash(cat:*), Echo, Touch, Bash
-model: inherit
+model: claude-haiku-4-5
 ---
 
 # Solution Debater Agent

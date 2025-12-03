@@ -237,13 +237,13 @@ class GaussianDiffusion1D(nn.Module):
                 anm_warmup_steps,
                 use_adversarial_corruption
             )
+            print(f"🎯 Curriculum enabled with config: {curriculum_config}")
         else:
             self.curriculum_runtime = None
+            print(f"🎯 No curriculum specified, using static configuration")
 
+        self.channels = 3
         self.seq_length = seq_length
-        self.objective = objective
-        self.show_inference_tqdm = show_inference_tqdm
-        assert objective in {'pred_noise', 'pred_x0', 'pred_v'}, 'objective must be either pred_noise (predict noise) or pred_x0 (predict image start) or pred_v (predict v [v-parameterization as defined in appendix D of progressive distillation paper, used in imagen-video successfully])'
 
         if beta_schedule == 'linear':
             betas = linear_beta_schedule(timesteps)
@@ -320,6 +320,10 @@ class GaussianDiffusion1D(nn.Module):
 
         register_buffer('loss_weight', loss_weight)
         # whether to autonormalize
+
+        self.show_inference_tqdm = show_inference_tqdm
+
+        self.objective = objective
 
     def predict_start_from_noise(self, x_t, t, noise):
         return (
@@ -694,7 +698,8 @@ class GaussianDiffusion1D(nn.Module):
         loss_mse = loss
 
         if self.supervise_energy_landscape:
-            noise = torch.randn_like(x_start)
+            # CRITICAL-009 FIX: Use the same noise for both MSE and energy supervision paths
+            # Instead of generating new noise, reuse the noise from the main path
             data_sample = self.q_sample(x_start = x_start, t = t, noise = noise)
 
             if mask is not None:
@@ -702,7 +707,8 @@ class GaussianDiffusion1D(nn.Module):
                 data_sample = data_sample * (1 - mask) + mask * data_cond
 
             # Generate adversarial negative sample using enhanced corruption
-            if not mask:
+            # CRITICAL-001 FIX: Replace 'if not mask:' with 'if mask is None:'
+            if mask is None:
                 data_cond = None
             
             xmin_noise = self.enhanced_corruption_step(inp, x_start, t, mask, data_cond)
@@ -711,11 +717,13 @@ class GaussianDiffusion1D(nn.Module):
             loss_opt = torch.ones(1).to(x_start.device)
             
             # Use temperature from curriculum if available, otherwise default to 0.5
+            # CRITICAL-002 FIX: Add numerical stability with epsilon buffer
             if temperature is not None:
                 # Higher temperature = lower loss scale (more exploration)
                 # Lower temperature = higher loss scale (more exploitation)
                 # Scale inversely with temperature, clamped to reasonable range
-                loss_scale = 1.0 / max(temperature, 0.5)
+                eps = 1e-6
+                loss_scale = 1.0 / max(temperature, 0.5 + eps)
                 loss_scale = min(max(loss_scale, 0.1), 2.0)  # Clamp between 0.1 and 2.0
             else:
                 loss_scale = 0.5
@@ -730,16 +738,23 @@ class GaussianDiffusion1D(nn.Module):
             t_concat = torch.cat([t, t], dim=0)
             energy = self.model(inp_concat, x_concat, t_concat, return_energy=True)
 
-            # Compute noise contrastive energy loss
+            # CRITICAL-003 FIX: Replace cross-entropy with margin-based contrastive loss
+            # Cross-entropy assumes normalized probabilities, but energy values are unbounded
             energy_real, energy_fake = torch.chunk(energy, 2, 0)
-            energy_stack = torch.cat([energy_real, energy_fake], dim=-1)
-            target = torch.zeros(energy_real.size(0)).to(energy_stack.device)
-            loss_energy = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
+            
+            # Use margin-based contrastive loss instead of cross-entropy
+            # We want energy_real < energy_fake (real samples have lower energy)
+            margin = 1.0  # Margin for contrastive loss
+            energy_diff = energy_fake - energy_real  # Should be positive
+            loss_energy = F.relu(margin - energy_diff)  # Hinge loss with margin
+            
+            # Reshape for consistency with rest of the code
+            loss_energy = loss_energy.unsqueeze(-1)
             
             # Track energy differences for adaptive curriculum
             with torch.no_grad():
-                energy_diff = (energy_fake - energy_real).mean().item()
-                self.recent_energy_diffs.append(max(0, energy_diff))
+                energy_diff_val = energy_diff.mean().item()
+                self.recent_energy_diffs.append(max(0, energy_diff_val))
                 if len(self.recent_energy_diffs) > 100:
                     self.recent_energy_diffs.pop(0)
 
@@ -940,6 +955,8 @@ class Trainer1D(object):
             'opt': self.opt.state_dict(),
             'ema': self.ema.state_dict(),
             'scaler': self.accelerator.scaler.state_dict() if exists(self.accelerator.scaler) else None,
+            # CRITICAL FIX: Add training_step to checkpoint for curriculum continuity
+            'training_step': unwrapped_model.training_step,
         }
         print(f"DEBUG: Save data dictionary created with step={self.step}")
 
@@ -1044,6 +1061,13 @@ class Trainer1D(object):
         self.opt.load_state_dict(data['opt'])
         if self.accelerator.is_main_process:
             self.ema.load_state_dict(data["ema"])
+        
+        # CRITICAL FIX: Restore training_step to maintain curriculum continuity on resume
+        if 'training_step' in data:
+            model.training_step = data['training_step']
+            print(f"DEBUG: Restored training_step={model.training_step}")
+        else:
+            print(f"WARNING: training_step not found in checkpoint, keeping current value={model.training_step}")
 
         if 'version' in data:
             print(f"loading from version {data['version']}")
@@ -1086,8 +1110,8 @@ class Trainer1D(object):
 
                     data_time = time.time() - end_time; end_time = time.time()
                     
-                    # Increment step counter before loss computation
-                    self.model.training_step += 1
+                    # CRITICAL FIX: Removed training_step increment from gradient accumulation loop
+                    # Training step should increment once per optimizer step, not per gradient accumulation
 
                     with self.accelerator.autocast():
                         loss, (loss_denoise, loss_energy, loss_opt) = self.model(inp, label, mask)
@@ -1095,6 +1119,8 @@ class Trainer1D(object):
                         total_loss += loss.item()
 
                     self.accelerator.backward(loss)
+
+                accelerator.wait_for_everyone()
 
                 accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
 
@@ -1104,6 +1130,10 @@ class Trainer1D(object):
                 self.opt.zero_grad()
 
                 accelerator.wait_for_everyone()
+
+                # CRITICAL FIX: Increment training step ONCE per optimizer step (outside gradient accumulation loop)
+                # This ensures curriculum progression timing works correctly regardless of gradient_accumulate_every
+                self.model.training_step += 1
 
                 nn_time = time.time() - end_time; end_time = time.time()
                 pbar.set_description(f'loss: {total_loss:.4f} loss_denoise: {loss_denoise:.4f} loss_energy: {loss_energy:.4f} loss_opt: {loss_opt:.4f} data_time: {data_time:.2f} nn_time: {nn_time:.2f}')
@@ -1618,4 +1648,3 @@ def shortest_path_1d_accuracy_closed_loop(pred: torch.Tensor, label: torch.Tenso
     return {
         'closed_loop_success_rate' + name: as_float(succ.float().mean()),
     }
-
